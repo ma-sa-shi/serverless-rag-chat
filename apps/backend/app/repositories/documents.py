@@ -146,8 +146,10 @@ class DocumentRepository:
     ) -> None:
         """条件付き更新でステータスを遷移させる。
 
-        現在のステータスがallowed_from外の場合はDocumentStatusErrorを送出する。
         chunk_countは取込完了時のみ指定し、再取込での余剰ベクトル削除に使う。
+
+        Raises:
+            DocumentStatusError: 現在のステータスがallowed_from外の場合
         """
         expression = "SET #status = :status, updatedAt = :now"
         values: dict[str, str | int] = {
