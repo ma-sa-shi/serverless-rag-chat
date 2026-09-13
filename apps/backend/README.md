@@ -1,6 +1,6 @@
 # backend
 
-3つのLambda(api-fn / chat-fn / ingest-fn)が共有するFastAPIのコードベース。CloudFrontの`/api/*`ルーティングに合わせ、ルートはすべて`/api`配下に置く。
+3つのLambda(api-fn / chat-fn / ingest-fn)が共有するFastAPIのコードベース。CloudFrontの`/api/*`ルーティングに合わせ、エンドポイントは全て `/api` 配下に配置する
 
 ## セットアップ
 

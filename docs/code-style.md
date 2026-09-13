@@ -2,7 +2,7 @@
 
 CLAUDE.md の「TypeScript Code Style」「Python Code Style」「Comments」で定めた規約について、判断に迷いやすい箇所を実際のコードで示す。規約そのものは CLAUDE.md が正であり、この文書は解釈と適用例を補うものとする。
 
-引用元を示していないコード片は、説明のために書いた仮の例である。
+引用元を示していないコード片は、説明用のダミーコードである。
 
 ## 目次
 
@@ -28,9 +28,9 @@ CLAUDE.md の「TypeScript Code Style」「Python Code Style」「Comments」で
 
 ### 1.1 分岐に名前を付ける
 
-ステータスのような有限の文字列ユニオンを扱うときは、分岐そのものを値の対応表として書く。
+ステータスのような有限の文字列ユニオンを扱う場合、三項演算子のネストを避け、マップ構造として記述する。
 
-悪い例:
+非推奨:
 
 ```tsx
 export function StatusBadge({ status }: { status: DocumentStatus }) {
@@ -50,7 +50,7 @@ export function StatusBadge({ status }: { status: DocumentStatus }) {
 }
 ```
 
-良い例（`apps/frontend/src/components/StatusBadge.tsx`）:
+推奨（`apps/frontend/src/components/StatusBadge.tsx`）:
 
 ```tsx
 const LABELS: Record<DocumentStatus, string> = {
@@ -71,13 +71,13 @@ export function StatusBadge({ status }: { status: DocumentStatus }) {
 }
 ```
 
-`Record<DocumentStatus, string>` は全キーの定義を要求するため、`DocumentStatus` にステータスが増えたときに漏れがコンパイルエラーになる。三項演算子の連鎖では最後の `else` に吸い込まれて気付けない。
+`Record<DocumentStatus, string>` は全キーの定義を要求するため、`DocumentStatus` にステータスが増えたときに定義漏れがコンパイルエラーになる。一方、三項演算子の連鎖では追加したステータスが最後の分岐（`"失敗"`）に流れてしまい、漏れに気付けない。
 
 ### 1.2 早期リターンで平坦にする
 
-条件ごとに返す値が決まっている関数は、条件を並べて順に返す。
+条件ごとに戻り値が確定する関数は、ネストを作らず早期リターンで平坦に記述する。
 
-悪い例:
+非推奨:
 
 ```ts
 export function toErrorMessage(error: unknown, fallback: string): string {
@@ -102,7 +102,7 @@ export function toErrorMessage(error: unknown, fallback: string): string {
 }
 ```
 
-良い例（`apps/frontend/src/lib/errors.ts`）:
+推奨（`apps/frontend/src/lib/errors.ts`）:
 
 ```ts
 export function toErrorMessage(error: unknown, fallback: string): string {
@@ -128,11 +128,11 @@ export function toErrorMessage(error: unknown, fallback: string): string {
 }
 ```
 
-条件が1段に揃うため、ケースの追加が1ブロックの追加で済む。最後の三項演算子は入れ子になっておらず「detailが文字列なら添える」という1段の判断なので残してよい。
+条件分岐が同階層に揃うため、エラーケースの追加が単一ブロックの追加のみで完了する。末尾の三項演算子はネストされておらず、「`detail` が文字列の場合のみ付加する」という1段階の評価であるため、そのまま残して問題ない。
 
 ### 1.3 中間変数は業務ルールに名前を付けるために使う
 
-悪い例:
+非推奨:
 
 ```tsx
 {document.userId === currentUserId &&
@@ -143,7 +143,7 @@ export function toErrorMessage(error: unknown, fallback: string): string {
   )}
 ```
 
-良い例（`apps/frontend/src/components/DocumentTable.tsx`）:
+推奨（`apps/frontend/src/components/DocumentTable.tsx`）:
 
 ```tsx
 // バックエンドのステータス遷移(uploaded|failed → processing)に合わせる
@@ -153,15 +153,9 @@ const canIngest =
   document.userId === currentUserId && INGESTABLE.includes(document.status);
 ```
 
-「本人のドキュメントで、かつ取込可能な状態」という業務ルールに `canIngest` という名前が付く。JSXの中で条件を組み立てると、表示の都合と業務ルールが混ざって読み分けられなくなる。
+「本人のドキュメントかつ取込可能状態」という業務ルールに対し、`canIngest` と命名して明確化する。JSX 内で条件式を組み立てると、表示ロジックと業務ルールが混在し直感的に把握しづらくなる。
 
-逆に、値を移し替えるだけの中間変数は入れない。次のような変数は `document.filename` をそのまま使えばよい。
-
-```ts
-const filename = document.filename; // 不要
-```
-
-ラッパー関数も同じ基準で判断する。`apps/frontend/src/pages/Documents.tsx` の `invalidateDocuments` は中身が1行だが3箇所から呼ばれ、「一覧のキャッシュを無効化する」という操作に名前を与えているので残す価値がある。呼び出しが1箇所しかない1行のラッパーは書かない。
+なお、値を移し替えるだけの中間変数は定義しない（例: `const filename = document.filename`）。ラッパー関数も同じ基準で判断する。`apps/frontend/src/pages/Documents.tsx` の `invalidateDocuments` は中身が1行だが3箇所から呼ばれ、「一覧のキャッシュを無効化する」という操作に名前を与えているため残す。一方、呼び出しが1箇所しかない1行のラッパーは書かない。
 
 ### 1.4 イディオムとして許容するもの
 
@@ -170,11 +164,11 @@ onSuccess: () => void invalidateDocuments(),
 onOpen={(id) => void handleOpen(id)}
 ```
 
-`void` は `no-misused-promises` に対して「戻り値のPromiseを意図的に捨てる」ことを示す定型表現で、エコシステムで広く共有されている。この例外は、意図が一目で伝わる定型表現にのみ適用する。`!!value` や `~list.indexOf(x)` のような、短さのために意味を圧縮した書き方はこの例外に含めない。
+`void` は、ESLint の `no-misused-promises` に対して戻り値の `Promise` を意図的に捨てることを示す定型表現であり、エコシステムで広く共有されている。この例外は意図が一目で伝わるイディオムにのみ適用し、`!!value` や `~list.indexOf(x)` のように短くするために意味を圧縮した書き方は許容しない。
 
 ### 1.5 抽象化を先取りしない
 
-悪い例:
+非推奨:
 
 ```ts
 function createResourceHooks<T>(queryKey: string[], fetcher: () => Promise<T[]>) {
@@ -190,7 +184,7 @@ function createResourceHooks<T>(queryKey: string[], fetcher: () => Promise<T[]>)
 const documentHooks = createResourceHooks(["documents"], listDocuments);
 ```
 
-良い例（`apps/frontend/src/pages/Documents.tsx`）:
+推奨（`apps/frontend/src/pages/Documents.tsx`）:
 
 ```ts
 const documentsQuery = useQuery({
@@ -204,11 +198,11 @@ const documentsQuery = useQuery({
 });
 ```
 
-現時点で一覧を持つリソースはドキュメントだけであり、共通化しても呼び出し側は短くならない。むしろ `refetchInterval` のようなリソース固有の設定を汎用フックへ通す口が必要になり、抽象が壊れる。2つ目のリソースが現れて共通部分が確定してから括る。
+現時点で一覧取得処理を持つリソースはドキュメントのみであるため、共通フックを作成しても呼び出し側の記述は簡潔にならない。むしろ `refetchInterval` のようなリソース固有の設定を汎用フック経由で渡す必要が生じ、抽象化が破綻する。2つ目のリソースが登場し、共通パターンが確定してから共通化を行う。
 
 ### 1.6 判断が割れる例
 
-`apps/frontend/src/pages/Documents.tsx` にあった次の記述は、入れ子の三項ではないため規約違反ではないが、JSXの属性内で条件と `??` が重なって読み取りに一拍かかる。
+`apps/frontend/src/pages/Documents.tsx` にあった次のコードは規約違反（三項演算子のネスト）ではないが、JSX 属性内で条件式と `??` が重なり、読み取りに一拍かかる。
 
 ```tsx
 ingestingId={
@@ -216,7 +210,7 @@ ingestingId={
 }
 ```
 
-変数へ抽出すると、`isPending` で絞る理由をコメントで補える位置ができる。
+変数へ抽出すると、`isPending` で絞り込む理由をコメントで補える場所ができる。
 
 ```tsx
 // mutationのvariablesは実行中のdocumentIdを指す。完了後も直前の値が残る為isPendingで絞る
@@ -225,13 +219,13 @@ const ingestingId = ingestMutation.isPending
   : null;
 ```
 
-この種の判断は「JSXを上から読んで各属性が何を渡しているか一読で分かるか」を基準にする。分からなければ props へ渡す前に名前を付ける。
+判断基準: 「JSX を上から順に読み進めた際、渡されている属性値の意図が一読で解釈できるか」。解釈に引っかかりが生じる場合は props に渡す前に命名・抽出する。
 
 ## 2. コメントとdocstring
 
 ### 2.1 残す価値のあるコメント
 
-いずれもコードからは読み取れない理由・制約・他モジュールとの取り決めを書いている。
+コードから読み取れない「採用理由」「制約条件」「他モジュールとのインターフェース契約」を記載する。
 
 ```ts
 // apps/frontend/src/lib/fileTypes.ts
@@ -263,11 +257,11 @@ ListVectorsにprefix絞り込みがない為、前回のチャンク数から削
 """
 ```
 
-判断基準は「このコメントを消したら、次に読む人が調べ直す羽目になるか」である。ADRで詳細を説明済みのものは、理由を1行に圧縮して参照先を書く。
+判断基準: 「そのコメントを削った場合、後続の担当者が背景調査や再検証を強いられるか」。ADR に詳細がある場合は 1 行に要約し、参照先リンクを記載する。
 
 ### 2.2 消すべきコメント
 
-コードがそのまま言っていることを繰り返すコメントは書かない。
+コードの挙動を単にトレースするだけのコメントは削除する。
 
 ```python
 # apps/backend/app/rag/utils.py（修正前）
@@ -278,7 +272,7 @@ sorted_items = sorted(
 )
 ```
 
-`reverse=True` は降順であり、コメントは情報を足していない。
+`reverse=True` 自体が降順を意味しており情報量が増えていない。関数の型定義・命名から自明なコメントも同様に削除する。
 
 ```ts
 // ドキュメント一覧を取得する
@@ -289,7 +283,7 @@ export async function listDocuments(): Promise<DocumentSummary[]> {
 
 ### 2.3 docstring
 
-悪い例（`apps/backend/app/rag/utils.py` の修正前）:
+非推奨（`apps/backend/app/rag/utils.py` の修正前）:
 
 ```python
 def reciprocal_rank_fusion(
@@ -307,9 +301,9 @@ def reciprocal_rank_fusion(
     """
 ```
 
-`retriever_outputs` と `top_n` の説明は名前と型の言い換えでしかない。一方で「kが何の定数か」「同一ドキュメントをdoc.idで名寄せする」は署名から読み取れないため残す。
+型定義・引数名から自明な情報（`retriever_outputs`, `top_n`）の列挙は省略する。署名から読み取れない仕様（`k` の役割、`doc.id` による名寄せなど）のみを簡潔に記述する。
 
-良い例:
+推奨:
 
 ```python
 def reciprocal_rank_fusion(
@@ -321,13 +315,13 @@ def reciprocal_rank_fusion(
     """
 ```
 
-例外を契約として伝える場合は `Raises:` を書く。`DocumentRepository.update_status` の `DocumentStatusError` は呼び出し側が409へ変換する必要があるため、docstringで明示している。
+例外が呼び出し側との契約に含まれる場合は `Raises:` を書く。`DocumentRepository.update_status` の `DocumentStatusError` はルーターが 409 へ変換する必要があるため、`Raises:` で送出条件を明示している。
 
 ## 3. Python
 
 ### 3.1 匿名の入れ子dictを型にする
 
-悪い例（`apps/backend/app/rag/utils.py` の修正前）:
+非推奨（`apps/backend/app/rag/utils.py` の修正前）:
 
 ```python
 # { doc_id: {score: スコア, document: Documentオブジェクト} }
@@ -343,9 +337,9 @@ sorted_items = sorted(doc_score_map.items(), key=lambda x: x[1]["score"], revers
 return [item[1]["document"] for item in sorted_items[:top_n]]
 ```
 
-問題は3点ある。内側の `dict` が未パラメータ化で中身が型で表現されていないこと、その構造をコメントで補っていること、`item[1]["document"]` のように意味のあるフィールドを位置と文字列キーで取り出していることである。
+ここには3つの問題がある。内側の `dict` に型引数がなく中身が型で表現されていない点、そのデータ構造をコメントで説明している点、そして `item[1]["document"]` のように位置インデックスや文字列キーで値を取り出している点である。
 
-良い例:
+推奨:
 
 ```python
 @dataclass
@@ -371,13 +365,13 @@ def reciprocal_rank_fusion(
     return [entry.document for entry in ranked[:top_n]]
 ```
 
-構造を説明していたコメントが型定義に置き換わり、`entry.score` / `entry.document` で意味が読める。
+構造を補足していたコメントが型定義へ置き換わり、`entry.score` や `entry.document` として直感的に読み取れるようになる。
 
 ### 3.2 外部データの形はTypedDictで宣言する
 
-DynamoDBの項目のように、辞書の形が他モジュールとの契約になっているものは `TypedDict` で宣言する。
+DynamoDB の項目のように、辞書の形がモジュール間の契約になっている場合は `TypedDict` で宣言する。
 
-悪い例（`apps/backend/app/repositories/documents.py` の修正前）:
+非推奨（`apps/backend/app/repositories/documents.py` の修正前）:
 
 ```python
 def get_owned(self, user_id: str, document_id: str) -> dict | None: ...
@@ -386,7 +380,7 @@ def list_recent(self, limit: int) -> list[dict]: ...
 
 呼び出し側は `document["s3Key"]` や `document.get("chunkCount", 0)` のようにキーを直接書くが、そのキーが存在するかどうかは型に現れない。
 
-良い例:
+推奨:
 
 ```python
 class DocumentItem(TypedDict):
@@ -410,7 +404,7 @@ def get_owned(self, user_id: str, document_id: str) -> DocumentItem | None: ...
 def list_recent(self, limit: int) -> list[DocumentItem]: ...
 ```
 
-`chunkCount` が任意項目であることや、DynamoDBの数値が `Decimal` で返ることが型に現れる。`pipeline.py` の次のコメントは、型が同じ内容を語るようになったため2行から1行へ減らせた。
+`chunkCount` が任意項目であることや、DynamoDB の数値が `Decimal` で返ることが型に現れる。そのため `pipeline.py` の次のコメントは、型と重なる説明を削って2行から1行に減らせた。
 
 ```python
 # 修正前
@@ -425,7 +419,7 @@ previous_count=int(document.get("chunkCount", 0)),
 
 ### 3.3 Anyを使ってよい境界
 
-悪い例（`apps/backend/app/ingest/pipeline.py` の修正前）:
+非推奨（`apps/backend/app/ingest/pipeline.py` の修正前）:
 
 ```python
 @dataclass(frozen=True)
@@ -437,9 +431,9 @@ class IngestPipeline:
     s3_client: Any
 ```
 
-`s3_client` は boto3 が動的にクライアントを生成し正確な型を付けられないため `Any` が妥当である。一方 `embedder` は自前の `CohereEmbedder` であり、テストで差し替えたいだけなら必要なメソッドを `Protocol` で宣言できる。
+`s3_client` は boto3 が動的に生成するクライアントであり、正確な型を付けられないため `Any` が妥当である。一方 `embedder` の実体は自前の `BedrockEmbedder` なので、テストで差し替えたいだけなら必要なメソッドを `Protocol` で宣言すればよい。
 
-良い例:
+推奨:
 
 ```python
 class Embedder(Protocol):
@@ -460,10 +454,10 @@ class IngestPipeline:
 
 ### 3.4 状態とループ
 
-同じ状態を表す変数を複数持たない。
+同一の状態を表す変数を複数保持しない。
 
 ```python
-# 悪い例
+# 非推奨
 kept: list[str] = []
 kept_count = 0
 for chunk in chunks:
@@ -471,26 +465,26 @@ for chunk in chunks:
         kept.append(chunk)
         kept_count += 1
 
-# 良い例
+# 推奨
 kept = [chunk for chunk in chunks if chunk]
 kept_count = len(kept)
 ```
 
-引数は再代入せず、新しいローカル変数を導入する。
+関数の引数は再代入せず、新しいローカル変数を割り当てる。
 
 ```python
-# 悪い例
+# 非推奨
 def split_text(text: str, *, chunk_size: int = CHUNK_SIZE) -> list[str]:
     text = text.strip()
     ...
 
-# 良い例
+# 推奨
 def split_text(text: str, *, chunk_size: int = CHUNK_SIZE) -> list[str]:
     normalized = text.strip()
     ...
 ```
 
-複雑な状態管理が避けられない場合は、保つべき不変条件を書く。`apps/backend/app/ingest/chunking.py` の `_merge` が該当する。
+複雑な状態管理が避けられない場合は、維持すべき不変条件をコメントに書く。`apps/backend/app/ingest/chunking.py` の `_merge` 関数がこれに該当する。
 
 ```python
 chunks: list[str] = []
@@ -499,21 +493,21 @@ current: list[str] = []
 total = 0
 ```
 
-`total` は `current` から計算できる派生値だが、ループのたびに再計算するとチャンク分割が O(n²) になるため保持している。この場合は「`total` が何と一致していなければならないか」を1行で書く。派生値のキャッシュは、このように性能上の理由があるときに限る。
+`total` は `current` から算出できる派生値だが、ループのたびに再計算するとチャンク分割の計算量が O(n²) になるため保持している。このような場合は「`total` が何と一致していなければならないか」を1行のコメントで書く。派生値のキャッシュは、性能上の明確な理由がある場合に限る。
 
 ## 4. 規約整備時に直した箇所
 
-規約を後から整備したため、既存コードに未適用の箇所が残っていた。次の箇所は適用済みである。
+規約制定前に書かれたコードについて、以下の修正を行った。
 
 | 箇所 | 内容 |
 | --- | --- |
-| `app/rag/utils.py` | `dict[str, dict]` を `_FusedDocument` へ。`Args:` / `Returns:` の羅列と `reverse=True,  # 降順` を削除し、位置指定アクセスを名前付きアクセスへ |
-| `app/repositories/*.py` | 戻り値の `dict` / `list[dict]` を `DocumentItem` / `ChatItem` / `ChatAttemptItem` / `UserProfileItem` へ。ステータスは `DocumentStatus` のLiteral型にした |
-| `app/rag/stream.py` | `to_document_payload` の戻り値を `RetrievedDocument` へ。`_attempts` の `list[tuple]` を `Attempt` NamedTupleにし、試行の各要素を名前で参照できるようにした |
-| `app/ingest_queue.py` / `app/ingest_handler.py` | SQSメッセージ本文を `IngestMessage` として宣言。Powertoolsデコレータの説明コメントを1行へ |
-| `app/ingest/pipeline.py` | `embedder: Any` を `Embedder` Protocolへ。`s3_client: Any` は理由をコメントに残して維持 |
-| `app/rag/state.py` | `GraphState` の `Attributes:` ブロックを、署名から読み取れない内容だけへ圧縮 |
-| `app/routers/*.py` | `model_validate(i) for i in ...` の `i` を `item` へ |
-| `apps/frontend/src/pages/Documents.tsx` | JSX属性内で組み立てていた `ingestingId` を変数へ抽出 |
+| `app/rag/utils.py` | `dict[str, dict]` を `_FusedDocument` へリファクタリング。`Args:` / `Returns:` の冗長な列挙や `reverse=True, # 降順` コメントを削除し、位置参照からフィールド名参照へ変更 |
+| `app/repositories/*.py` | 戻り値の `dict` / `list[dict]` を `DocumentItem` 等の `TypedDict` へ変更。ステータス属性の型を `DocumentStatus`（Literal型）に変更 |
+| `app/rag/stream.py` | `to_document_payload` の戻り値を `RetrievedDocument` へ変更。`_attempts` の `list[tuple]` を `Attempt`（`NamedTuple`）へ変更 |
+| `app/ingest_queue.py` / `app/ingest_handler.py` | SQS メッセージ構造を `IngestMessage` として明示的に宣言 |
+| `app/ingest/pipeline.py` | `embedder: Any` を `Embedder`（`Protocol`）へ変更。`s3_client: Any` は理由をコメントに残して維持 |
+| `app/rag/state.py` | `GraphState` の docstring を、実装から読み取れない内容だけに絞った |
+| `app/routers/*.py` | 内包表記内の変数名 `i` を `item` へ修正 |
+| `apps/frontend/src/pages/Documents.tsx` | JSX 属性内で組み立てていた `ingestingId` をローカル変数へ抽出 |
 
-RAGまわり（`app/rag/`）は既存実装からの移植であり、規約整備前の書き方が入り込みやすい。移植を続けるときは、移植元の書き方をそのまま持ち込まないよう合わせて調整する。
+RAG 関連（`app/rag/`）は既存実装からの移植が多く、規約制定前の書き方が入り込みやすい。そのため、機能の追加や変更のたびに合わせて本規約を適用する。
