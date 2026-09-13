@@ -16,7 +16,7 @@ export function Layout() {
     <div className="layout">
       <header className="layout-header">
         <div className="layout-header-inner">
-          <span className="layout-brand">Event Driven RAG</span>
+          <span className="layout-brand">Knowledge Chat</span>
           <nav className="layout-nav">
             <NavLink to="/" end>
               チャット
