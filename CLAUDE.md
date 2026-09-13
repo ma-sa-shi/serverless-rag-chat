@@ -4,7 +4,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## Project Overview
 
-An internal RAG chat application on AWS serverless infrastructure. The system design document (in Japanese) is in `docs/architecture.md`, and individual architecture decision records are in `docs/adr/` — read them before making design decisions. The codebase is currently an early scaffold; implementation follows the development order defined at the end of the design doc.
+An internal RAG chat application on AWS serverless infrastructure. The system design document (in Japanese) is in `docs/architecture.md`, and individual architecture decision records are in `docs/adr/` — read them before making design decisions.
 
 Three independent workspaces, each with its own dependencies:
 

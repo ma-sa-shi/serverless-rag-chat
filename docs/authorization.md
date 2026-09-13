@@ -1,129 +1,127 @@
-# Authentication / Authorization 設計
+# 認証認可設計
 
 - 親ドキュメント: [architecture.md](./architecture.md)
 
-architecture.mdの認証設計の詳細を扱う。認証基盤の選定理由はADR-0004に、トークンの保存先の判断はADR-0010に記載する。
+本ドキュメントでは、architecture.mdにおける認証・認可設計の詳細仕様を定義する。認証基盤の選定理由はADR-0004に、トークン保存方針の決定理由はADR-0010にそれぞれ記載している。
 
 ## 設計方針
 
-本システムでは、認証をAmazon Cognitoに委譲し、FastAPIはJWTの検証のみを行う。
+本システムでは、認証処理を Amazon Cognito に委譲し、バックエンド（FastAPI）側では JWT の検証処理のみを行う。
 
-- 認証方式はOAuth 2.0 Authorization Code Flow + PKCEを採用する
-- SPAは`react-oidc-context`で実装する
-- トークンはlocalStorageに保存する
-- FastAPIはJWKSによるアクセストークンの検証のみを行い、パスワード管理やトークン発行、セッション管理を実装しない
+- 認証方式には OAuth 2.0 Authorization Code Flow + PKCE を採用する
+- SPA 側の認証機能は `react-oidc-context` を用いて実装する
+- 取得したトークンは localStorage に保存する
+- FastAPI では JWKS によるアクセストークンの検証のみを行い、パスワード管理、トークン発行、およびセッション管理機能は実装しない
 
 ## 認証フロー
 
 ```text
 SPA（未認証）
-    │ ⓪code_verifierを生成し、SHA-256でハッシュ化したcode_challengeをCognitoの認可エンドポイントへリクエストする。
+    │ ⓪code_verifierを生成し、SHA-256でハッシュ化したcode_challengeをCognitoの認可エンドポイントへ送信する。
     │
     ▼
 Cognito Hosted UI
-    │ ①emailとpasswordで認証に成功したら認可コードを付加してredirect_uriへリダイレクトする。
+    │ ①メールアドレスとパスワードによる認証成功後、認可コードを付与して redirect_uri へリダイレクトする。
     ▼
 /auth/callback?code=...
-    │ ②認可コードとcode_verifierをトークンエンドポイントへ送信する。
+    │ ②認可コードと code_verifier を Cognito のトークンエンドポイントへ送信する。
     ▼
 Cognito Token Endpoint
-    │ ③code_verifierがcode_challengeと一致することを検証し、後述するaccess_token, id_token, refresh_tokenを発行する。
+    │ ③code_verifier と code_challenge の一致を検証し、各トークン（access_token / id_token / refresh_token）を発行する。
     ▼
 SPA
-    │ ④JWTをlocalStorageに保存する。AuthorizationヘッダにJWTを付与してリクエストする。
+    │ ④トークンを localStorage に保存し、以降の API リクエスト時に Authorization ヘッダーへ JWT を付与して送信する。
     ▼
 FastAPI
-      ⑤JWKSで署名検証し、`iss` / `client_id` / `exp` / `token_use=access`を検証する。`sub`をuser_idとして利用。
+      ⑤JWKS による署名検証を実施し、iss / client_id / exp / token_use=access を検証した上で sub を user_id として利用する。
 ```
 
 ---
 
 ## ユーザー登録
 
-- ユーザーによるサインアップを行わず、管理者がCognitoにユーザーを作成し、Cognitoが有効期限7日の初期パスワード付きの招待メールを送信する。
-- 招待メールを受け取ったユーザーは恒久パスワードを設定する。
+- ユーザー自身によるセルフサインアップは許可せず、管理者が Cognito コンソール上でユーザーアカウントを作成する。作成後、Cognito より有効期限7日間の初期パスワードを含む招待メールが対象ユーザーへ送信される。
+- 招待メールを受信したユーザーは、初回サインイン時に本パスワードを設定する。
 
 ## IdP連携
 
-導入期はCognitoによるemailとpasswordによる認証とし、Google Workspace / Entra ID等のSAML / OIDC連携は必要になった時点で追加する。\
-標準OIDCクライアントを採用しているため、IdP追加時のSPA側の変更は設定のみで済む。
+初期導入時は Cognito によるメールアドレス・パスワード認証を採用し、Google Workspace や Microsoft Entra ID 等との SAML / OIDC 連携機能は必要に応じて後から追加する方針とする。
+フロントエンド側では標準 OIDC クライアントライブラリを採用しているため、将来的な IdP 追加時にも SPA 側の改修は設定変更のみで完了する。
 
 ---
 
-## トークン
+## トークン仕様
 
 | Token | 有効期限 | 用途 |
 |-------|---------|------|
-| Access Token | 1時間（Cognitoのデフォルト値） | APIリクエストの`Authorization`ヘッダに使われる |
-| ID Token | 1時間（Cognitoのデフォルト値） | SPAでの表示名・メールアドレス表示のみに使われる |
-| Refresh Token | 30日 | Access TokenとID Tokenの自動更新に使われる |
+| Access Token | 1時間（Cognito既定値） | API リクエスト時の Authorization ヘッダーに使用 |
+| ID Token | 1時間（Cognito既定値） | SPA 画面上でのユーザー表示名およびメールアドレス表示にのみ使用 |
+| Refresh Token | 30日 | Access Token および ID Token の自動更新に使用 |
 
-- Access TokenとID Tokenは`react-oidc-context`の`automaticSilentRenew`で自動更新する
-- Refresh TokenがlocalStorageにタブを閉じても保持されるため、更新はrefresh token grantで行われる。iframeによるサイレントサインインは使わず、サードパーティCookieをブラウザがブロックする影響を受けない
-- Refresh Token失効時のみHosted UIへ再リダイレクトする
+- Access Token および ID Token は、`react-oidc-context` の `automaticSilentRenew` 機能により自動更新される。
+- Refresh Token はタブの破棄後も localStorage に保持されるため、トークン更新は Refresh Token Grant フローによって実行される。iframe を使用したサイレントサインインを行わない構成のため、サードパーティ Cookie に対するブラウザの制限仕様の影響を受けない。
+- Refresh Token の有効期限切れ（失効）が発生した場合のみ、Hosted UI 画面へ自動リダイレクトして再認証を促す。
 
 ---
 
 ## SPA実装
 
-`react-oidc-context`を利用する。設定値は`apps/frontend/src/auth/userManager.ts`の`UserManager`へ集約し、`AuthProvider`とaxiosのインターセプタで同一インスタンスを共有する。認可コードの受け口は`/auth/callback`とし、スコープは`openid email profile`とする。profileは表示名の取得に必要である。
+認証処理には `react-oidc-context` ライブラリを使用する。設定情報は `apps/frontend/src/auth/userManager.ts` の `UserManager` インスタンスへ集約し、AuthProvider および axios インターセプター間で同一インスタンスを共有する。認可コード受取用のリダイレクト先エンドポイントは `/auth/callback` とし、要求するスコープ（Scope）は `openid email profile` とする（profile スコープはユーザー表示名の取得に必要となる）。
 
 ### ライブラリ選定理由
 
-Authorization Code FlowやPKCEを自前実装するセキュリティリスクが高く、ライブラリに委譲する方が安全と判断した。また、`react-oidc-context`はReact向けに`AuthProvider`とフックの`useAuth`を提供しており、認証状態をコンポーネントツリーに自然に統合できる。標準OIDCクライアントであるため、将来IdPを変更する際もCognitoにロックインされず、SPA側の変更は設定のみで済む。
+Authorization Code Flow や PKCE フローを自前で実装することによるセキュリティリスクを回避し、検証済みの標準ライブラリに処理を委譲することが安全であると判断した。また、`react-oidc-context` は React 向けに AuthProvider コンポーネントおよび useAuth フックを提供しており、認証状態をコンポーネントツリー全体へ容易に組み込むことができる。さらに標準 OIDC クライアント規格に準拠しているため、将来的な IdP 変更時にも特定ベンダーへロックインされず、SPA 側の変更を設定更新のみに抑えられるメリットがある。
 
-### 採用しなかった代替案
+### 採用を見送った代替案
 
 | 代替案 | 見送り理由 |
 |--------|-----------|
-| AWS Amplify (Auth) | 認証機能のためにAmplifyの設定体系と重いランタイム一式を持ち込むことになるため |
-| amazon-cognito-identity-js | ログインフォームを自作する案であり、Hosted UIの採用と合致しないため |
-| PKCE自前実装 | Authorization Code Flow + PKCEを自作するとセキュリティリスクが高まるため |
+| AWS Amplify (Auth) | 単一の認証機能を実現するために、Amplify 固有の設定体系および巨大なランタイムライブラリを導入する必要が生じるため |
+| `amazon-cognito-identity-js` | 独自ログインフォームの構築を前提としたライブラリであり、Hosted UI を活用する設計方針と合致しないため |
+| PKCE自前実装 | Authorization Code Flow + PKCE フローの自作は実装の不備に伴うセキュリティリスクが高いため |
 
 ---
 
-## トークン保存
+## トークン保存方針
 
-`oidc-client-ts`の`WebStorageStateStore`を用いてlocalStorageへ保存する。リロードと複数タブでセッションを維持することを優先した判断である。採用理由、XSSリスクの受容範囲、sessionStorageやHttpOnly Cookieとの比較はADR-0010に記載する。
-
-XSSによるトークン窃取への対策のうち、Content Security Policyの設定は未実装である。
+`oidc-client-ts` の `WebStorageStateStore` を利用し、トークンを localStorage に保存する。本構成は、ページリロード時や複数タブ間でのセッション永続化・共有を優先した選択である。選定理由の詳細、XSS リスクの許容範囲、および sessionStorage や HttpOnly Cookie との比較検討についてはADR-0010に記載している。
 
 ---
 
 ## サインアウト
 
-- ヘッダーにサインアウトを配置する（独立ルートは設けない）
-- localStorageのトークンを破棄し、Cognitoの`/logout`エンドポイントへリダイレクトしてHosted UIのセッションも破棄する
-- logout後は`/`へ戻す
+- アプリケーションヘッダー内にサインアウトボタンを配置する（独立したサインアウトルートは作成しない）
+- サインアウト実行時は localStorage 内のトークン情報を破棄した上で、Cognito の `/logout` エンドポイントへリダイレクトして Hosted UI 側のセッションも同時に破棄する。
+- サインアウト完了後のリダイレクト先はルートパス（/）とする。
 
 ---
 
 ## バックエンド検証
 
-FastAPIでは以下のみを行う。
+FastAPI では、以下の検証処理のみを実施する。
 
-- JWKS（`/.well-known/jwks.json`）による署名検証。鍵はプロセス内でキャッシュする
-- `iss`（User Pool）、`client_id`、`exp`、`token_use=access`の検証
-- `sub`をuser_idとして利用する
+- JWKS エンドポイント（`/.well-known/jwks.json`）を用いた JWT の署名検証（取得した公開鍵はプロセス内でキャッシュする）
+- `iss`（User PoolのIssuer）、`client_id`、`exp`（有効期限）、および `token_use=access` の妥当性検証
+- `sub` クレームの値を抽出して user_id として識別利用
 
-検証対象はアクセストークンでありIDトークンではない。IDトークンはユーザーの属性をSPAへ伝えるためのものであり、API呼び出しの認可に用いるトークンではないためである。Cognitoのアクセストークンは`aud`を持たないため、宛先の検証は`client_id`と`token_use`のクレームで行う。
+バックエンドでの検証対象は Access Token であり、ID Token は検証しない。ID Token はユーザー属性を SPA 側に伝達するためのものであり、API 実行認可に使用するトークンではないためである。なお、Cognito が発行する Access Token には `aud` クレームが含まれないため、受取先の妥当性検証は `client_id` および `token_use` クレームを用いて行う。
 
 ---
 
-## 認可（Authorization）
+## 認可制御
 
-- 認証済みユーザーは全ユーザーのチャット履歴・ドキュメントを閲覧できる
-- 更新系（アップロード、取込、チャット作成、削除）は本人のリソースのみ
-- 管理者ロールは当面設けない。ユーザー管理はCognitoコンソールで行う
+- 認証済みのユーザーは、全ユーザーが作成したチャット履歴およびアップロードドキュメントを閲覧できる。
+- データ更新系操作（ドキュメントのアップロード・取込、チャット作成、データ削除）は、本人が作成したリソースに対してのみ実行可能とする。
+- 管理者ロールは当面定義せず、ユーザーアカウント管理は Cognito コンソール上で直接行う。
 
-### 閲覧を全ユーザーへ開放する理由
+### 閲覧権限を全ユーザーへ開放する理由
 
-本システムの目的は社内ナレッジの共有であり、誰がどの資料をどう問い合わせたかを相互に参照できることが価値になる。閲覧を本人のみに制限すると、同じ質問が繰り返され、蓄積した回答が再利用されない。
+本システムの主要目的は「社内ナレッジの共有」であり、他ユーザーが「どのような資料を基にどのような問い合わせを行ったか」を相互参照できる点に価値がある。閲覧権限を作成者本人のみに制限した場合、同様の質問が重複して行われ、蓄積された回答資産が再利用されない課題が生じるためである。
 
-このため閲覧範囲は次の前提の上で開放する。
+そのため、以下の前提運用を条件として閲覧範囲を全ユーザーに開放する。
 
-- 利用者はCognitoに登録された社内ユーザーのみであり、招待制で管理者が作成する
-- 部門機密や個人情報を含む文書は投入しない運用とする
-- 更新と削除は本人のリソースに限定し、他ユーザーのデータを変更できないようにする
+- システム利用者は Cognito に登録された社内ユーザーに限定され、アカウントは管理者による招待制で作成される
+- 部門の極秘情報や個人情報（PII）を含む文書は投入しない運用ルールを徹底する
+- データの更新および削除権限は作成者本人に限定し、他ユーザーによるデータの改変・破棄を防ぐ
 
-閲覧範囲を絞る要件が生じた場合は、DynamoDBのキー設計上ユーザー単位での絞り込みが可能であるため、一覧取得のクエリと認可判定の追加で対応する。
+なお、将来的にアクセス範囲の制限が必要となった場合でも、DynamoDB のキー設計においてユーザー単位の絞り込みが可能な構成となっているため、データ取得クエリの追加および認可ロジックの補強によって容易に対応可能である。
