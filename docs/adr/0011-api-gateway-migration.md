@@ -15,7 +15,7 @@ ADR-0009がAPI Gatewayを採用しなかった理由は次の2点である。
 - Lambda起動前の拒否やレート制限を必要とする事象が発生していなかった
 - SSEは中間層が増えるほどバッファリングやタイムアウトで壊れやすく、REST APIのレスポンスストリーミングによる動作を検証できていなかった
 
-SSEを配信する条件は揃っている。統合の`responseTransferMode`はaws-cdk-lib 2.261.0のL2の`IntegrationOptions`で設定できる。統合タイムアウトはサービスクォータ`Maximum integration timeout in milliseconds`に縛られるが、これが適用されるのは`BUFFERED`の統合のみであり、[`STREAM`の統合](https://docs.aws.amazon.com/apigateway/latest/developerguide/response-transfer-mode.html)は申請なしで最大15分まで設定できる。Self-RAGが最大8回のLLM呼び出しを行う場合でも、統合タイムアウトに収まる。
+SSEを配信する条件は揃っている。統合の`responseTransferMode`はaws-cdk-lib 2.261.0のL2の`IntegrationOptions`で設定できる。統合タイムアウトはサービスクォータ`Maximum integration timeout in milliseconds`に縛られるが、これが適用されるのは`BUFFERED`の統合のみであり、[`STREAM`の統合](https://docs.aws.amazon.com/apigateway/latest/developerguide/response-transfer-mode.html)は申請なしで最大15分まで設定できる。Self-RAGが最大7回のLLM呼び出しを行う場合でも、統合タイムアウトに収まる。
 
 ## Decision
 
