@@ -158,7 +158,7 @@ aws cognito-idp admin-create-user \
 
 Hosted UIのコールバックURLに`http://localhost:5173/auth/callback`を登録済みのため、デプロイ済みCognitoを使ってローカルで認証フローを動かせる。DataStackのCfnOutputの値を次の2箇所へ設定する。
 
-- `apps/frontend/.env.local` — `.env.example`をコピーしてCognitoIssuer / UserPoolClientId / CognitoDomainUrlを設定する
+- `apps/frontend/.env.local` — `.env.example`をコピーしてCognitoIssuer / UserPoolClientIdを設定する
 - バックエンド(uvicorn)の環境変数 — JWT検証と、デプロイ済みのDynamoDB・S3・SQS・S3 Vectorsへのアクセスに使う
 
 ```bash
