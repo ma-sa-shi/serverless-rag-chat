@@ -9,16 +9,23 @@ from app.dependencies import (
     get_document_repository,
     get_document_storage,
     get_ingest_queue,
+    get_user_repository,
     get_vector_index,
 )
 from app.ingest_queue import IngestQueue
 from app.logger import logger
 from app.repositories.documents import DocumentRepository, DocumentStatusError
+from app.repositories.users import UserRepository
 from app.schemas import DocumentResponse
 from app.storage import DocumentStorage
 from app.vectors import VectorIndex
 
 router = APIRouter(prefix="/documents")
+
+
+class DocumentListItemResponse(DocumentResponse):
+    # プロフィールが未登録の投稿者はnull
+    owner_name: str | None = Field(alias="ownerName", default=None)
 
 
 class CreateUploadUrlRequest(BaseModel):
@@ -45,11 +52,19 @@ class IngestResponse(BaseModel):
 def list_documents(
     _caller_id: Annotated[str, Depends(get_current_user_id)],
     repository: Annotated[DocumentRepository, Depends(get_document_repository)],
+    user_repository: Annotated[UserRepository, Depends(get_user_repository)],
     limit: Annotated[int, Query(ge=1, le=100)] = 50,
-) -> list[DocumentResponse]:
-    """全ユーザー横断のドキュメント一覧を新しい順で返す。"""
+) -> list[DocumentListItemResponse]:
+    """全ユーザー横断のドキュメント一覧を、投稿者の表示名を付けて新しい順で返す。"""
+    documents = repository.list_recent(limit)
+    names = user_repository.get_display_names(
+        {document["userId"] for document in documents}
+    )
     return [
-        DocumentResponse.model_validate(item) for item in repository.list_recent(limit)
+        DocumentListItemResponse.model_validate(
+            {**document, "ownerName": names.get(document["userId"])}
+        )
+        for document in documents
     ]
 
 

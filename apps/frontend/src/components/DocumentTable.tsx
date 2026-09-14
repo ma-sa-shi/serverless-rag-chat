@@ -69,7 +69,9 @@ export function DocumentTable({
               {showOwner && (
                 <td className="owner">
                   <Link to={`/user/${document.userId}`}>
-                    {document.userId === currentUserId ? "自分" : "ユーザー"}
+                    {document.userId === currentUserId
+                      ? "自分"
+                      : (document.ownerName ?? "ユーザー")}
                   </Link>
                 </td>
               )}

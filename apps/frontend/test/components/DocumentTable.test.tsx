@@ -117,21 +117,27 @@ describe("DocumentTable", () => {
     ).not.toBeInTheDocument();
   });
 
-  it("showOwnerのとき自分の行を「自分」、他人の行を「ユーザー」と表示する", () => {
+  it("showOwnerのとき自分の行を「自分」、他人の行を表示名で表示する", () => {
     renderTable({
       documents: [
-        document({ documentId: "mine" }),
-        document({ documentId: "theirs", userId: "user-other" }),
+        document({ documentId: "mine", ownerName: "自分の表示名" }),
+        document({
+          documentId: "theirs",
+          userId: "user-other",
+          ownerName: "山田 太郎",
+        }),
+        document({ documentId: "unknown", userId: "user-unknown" }),
       ],
       showOwner: true,
     });
 
-    const [mine, theirs] = screen.getAllByRole("row").slice(1);
+    const [mine, theirs, unknown] = screen.getAllByRole("row").slice(1);
     expect(within(mine).getByRole("link")).toHaveTextContent("自分");
-    expect(within(theirs).getByRole("link")).toHaveTextContent("ユーザー");
+    expect(within(theirs).getByRole("link")).toHaveTextContent("山田 太郎");
     expect(within(theirs).getByRole("link")).toHaveAttribute(
       "href",
       "/user/user-other",
     );
+    expect(within(unknown).getByRole("link")).toHaveTextContent("ユーザー");
   });
 });

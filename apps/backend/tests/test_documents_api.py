@@ -7,8 +7,9 @@ from ulid import ULID
 
 from app.dependencies import get_vector_index
 from app.main import app
+from app.repositories.users import UserRepository
 from app.vectors import VectorIndex
-from tests.conftest import BUCKET_NAME, VECTOR_INDEX_ARN
+from tests.conftest import BUCKET_NAME, TABLE_NAME, VECTOR_INDEX_ARN
 from tests.factories import put_document
 from tests.test_vectors import StubS3VectorsClient
 
@@ -299,3 +300,15 @@ def test_missing_token_returns_401(aws):
         client.post("/api/documents/upload-url", json={"filename": "a"}).status_code
         == 401
     )
+
+
+def test_document_list_includes_owner_display_name(make_token, aws):
+    doc1, doc2 = ulid_at(1), ulid_at(2)
+    UserRepository(TABLE_NAME).upsert_profile("user-a", "山田 太郎", "taro@example.com")
+    put_document(aws.table, user_id="user-a", document_id=doc1)
+    put_document(aws.table, user_id="user-without-profile", document_id=doc2)
+
+    res = client.get("/api/documents", headers=headers(make_token()))
+    assert res.status_code == 200
+    owner_names = {d["documentId"]: d["ownerName"] for d in res.json()}
+    assert owner_names == {doc1: "山田 太郎", doc2: None}

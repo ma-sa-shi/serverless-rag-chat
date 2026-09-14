@@ -5,6 +5,8 @@ from fastapi.testclient import TestClient
 from ulid import ULID
 
 from app.main import app
+from app.repositories.users import UserRepository
+from tests.conftest import TABLE_NAME
 from tests.factories import put_attempt, put_chat
 
 client = TestClient(app)
@@ -130,3 +132,15 @@ def test_unknown_chat_returns_404(make_token, aws):
 
 def test_missing_token_returns_401(aws):
     assert client.get("/api/chats").status_code == 401
+
+
+def test_chat_list_includes_owner_display_name(make_token, aws):
+    chat1, chat2 = ulid_at(1), ulid_at(2)
+    UserRepository(TABLE_NAME).upsert_profile("user-a", "山田 太郎", "taro@example.com")
+    put_chat(aws.table, user_id="user-a", chat_id=chat1)
+    put_chat(aws.table, user_id="user-without-profile", chat_id=chat2)
+
+    res = client.get("/api/chats", headers=headers(make_token()))
+    assert res.status_code == 200
+    owner_names = {c["chatId"]: c["ownerName"] for c in res.json()}
+    assert owner_names == {chat1: "山田 太郎", chat2: None}
