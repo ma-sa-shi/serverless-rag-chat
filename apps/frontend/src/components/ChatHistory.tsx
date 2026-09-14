@@ -39,7 +39,9 @@ export function ChatHistory({
           </Link>
           {showOwner && (
             <Link className="chat-owner" to={`/user/${chat.userId}`}>
-              {chat.userId === currentUserId ? "自分" : "ユーザー"}
+              {chat.userId === currentUserId
+                ? "自分"
+                : (chat.ownerName ?? "ユーザー")}
             </Link>
           )}
         </li>

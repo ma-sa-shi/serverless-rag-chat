@@ -4,11 +4,17 @@ from fastapi import APIRouter, Depends, HTTPException, Query, status
 from pydantic import BaseModel, Field
 
 from app.auth import get_current_user_id
-from app.dependencies import get_chat_repository
+from app.dependencies import get_chat_repository, get_user_repository
 from app.repositories.chats import ChatRepository
+from app.repositories.users import UserRepository
 from app.schemas import ChatSummaryResponse
 
 router = APIRouter(prefix="/chats")
+
+
+class ChatListItemResponse(ChatSummaryResponse):
+    # プロフィールが未登録の投稿者はnull
+    owner_name: str | None = Field(alias="ownerName", default=None)
 
 
 class RetrievedDocumentResponse(BaseModel):
@@ -36,12 +42,17 @@ class ChatDetailResponse(ChatSummaryResponse):
 def list_chats(
     _caller_id: Annotated[str, Depends(get_current_user_id)],
     repository: Annotated[ChatRepository, Depends(get_chat_repository)],
+    user_repository: Annotated[UserRepository, Depends(get_user_repository)],
     limit: Annotated[int, Query(ge=1, le=100)] = 50,
-) -> list[ChatSummaryResponse]:
-    """全ユーザーのチャット一覧を新しい順で返す。"""
+) -> list[ChatListItemResponse]:
+    """全ユーザーのチャット一覧を、投稿者の表示名を付けて新しい順で返す。"""
+    chats = repository.list_recent(limit)
+    names = user_repository.get_display_names({chat["userId"] for chat in chats})
     return [
-        ChatSummaryResponse.model_validate(item)
-        for item in repository.list_recent(limit)
+        ChatListItemResponse.model_validate(
+            {**chat, "ownerName": names.get(chat["userId"])}
+        )
+        for chat in chats
     ]
 
 

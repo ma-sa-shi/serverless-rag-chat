@@ -11,6 +11,8 @@ export interface DocumentSummary {
   status: DocumentStatus;
   createdAt: string;
   updatedAt: string;
+  /** 全ユーザー横断の一覧だけが返す。プロフィールが未登録の投稿者はnull */
+  ownerName?: string | null;
 }
 
 interface CreateUploadUrlResponse {

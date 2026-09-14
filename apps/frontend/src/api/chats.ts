@@ -14,6 +14,8 @@ export interface ChatSummary {
   finalGrade: ChatGrade | null;
   retryCount: number;
   createdAt: string;
+  /** 全ユーザー横断の一覧だけが返す。プロフィールが未登録の投稿者はnull */
+  ownerName?: string | null;
 }
 
 export interface RetrievedDocument {
