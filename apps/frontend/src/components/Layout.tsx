@@ -1,15 +1,20 @@
 import { useAuth } from "react-oidc-context";
 import { Link, NavLink, Outlet } from "react-router-dom";
-import { redirectToCognitoLogout } from "../auth/userManager";
 import "./Layout.css";
 
 export function Layout() {
   const auth = useAuth();
 
   const handleSignOut = async () => {
-    // localStorageのトークンを破棄してからHosted UIのセッションを破棄する
-    await auth.removeUser();
-    redirectToCognitoLogout();
+    // removeUserで先にトークンを消すと、RequireAuthのサインインリダイレクトが/logoutへの遷移を
+    // 上書きする。signoutRedirectはactiveNavigatorを立ててから消すため競合しない
+    // Cognitoの/logoutはclient_idとlogout_uriがあれば他のパラメータを無視する
+    await auth.signoutRedirect({
+      extraQueryParams: {
+        client_id: auth.settings.client_id,
+        logout_uri: window.location.origin,
+      },
+    });
   };
 
   return (

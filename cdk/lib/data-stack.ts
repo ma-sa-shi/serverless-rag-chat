@@ -210,9 +210,5 @@ export class DataStack extends cdk.Stack {
     new cdk.CfnOutput(this, "CognitoIssuer", {
       value: this.userPool.userPoolProviderUrl,
     });
-    // SPAのVITE_COGNITO_DOMAIN。サインアウトの/logoutリダイレクト
-    new cdk.CfnOutput(this, "CognitoDomainUrl", {
-      value: this.userPoolDomain.baseUrl(),
-    });
   }
 }

@@ -8,24 +8,6 @@ exports[`スナップショット 1`] = `
         "Ref": "AlarmTopicD01E77F9",
       },
     },
-    "CognitoDomainUrl": {
-      "Value": {
-        "Fn::Join": [
-          "",
-          [
-            "https://",
-            {
-              "Ref": "UserPoolHostedUiDomainE021B0B6",
-            },
-            ".auth.",
-            {
-              "Ref": "AWS::Region",
-            },
-            ".amazoncognito.com",
-          ],
-        ],
-      },
-    },
     "CognitoIssuer": {
       "Value": {
         "Fn::GetAtt": [
