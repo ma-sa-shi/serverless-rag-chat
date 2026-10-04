@@ -70,7 +70,16 @@ def test_token_signed_with_other_key_returns_401(make_token):
 
 
 def test_expired_token_returns_401(make_token):
-    assert get(make_token(expires_in=-60)).status_code == 401
+    assert get(make_token(expires_in=-120)).status_code == 401
+
+
+def test_token_issued_slightly_ahead_of_local_clock_is_accepted(make_token):
+    # ローカルの時計がCognitoより遅れていても、発行直後のトークンを拒否しない
+    assert get(make_token(issued_in=5)).status_code == 200
+
+
+def test_token_issued_far_in_the_future_returns_401(make_token):
+    assert get(make_token(issued_in=600)).status_code == 401
 
 
 def test_wrong_issuer_returns_401(make_token):

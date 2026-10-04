@@ -24,6 +24,10 @@ ACCESS_TOKEN_COOKIE = "__Host-access_token"
 REFRESH_TOKEN_COOKIE = "__Secure-refresh_token"
 AUTH_TRANSACTION_COOKIE = "__Secure-auth_tx"
 
+# コールバックは発行直後のトークンを検証する為、時計がCognitoより遅れているとiatが未来になり拒否される。
+# expの判定も同じ幅だけ緩むが、本番ではAPI Gatewayのオーソライザがexpを別に検証する
+CLOCK_SKEW_LEEWAY_SECONDS = 60
+
 # Authorization ヘッダーが存在しない場合、FastAPIは自動的に 403 Forbidden エラーを発生する
 # auto_error=False: Authorizationヘッダなしを403ではなく401で返す
 _bearer = HTTPBearer(auto_error=False)
@@ -65,6 +69,7 @@ def _decode(
         algorithms=["RS256"],
         issuer=settings.cognito_issuer,
         audience=audience,
+        leeway=CLOCK_SKEW_LEEWAY_SECONDS,
         options={"require": ["exp", "iss", "sub", *required]},
     )
 

@@ -120,6 +120,7 @@ FastAPI では、Access Token に対して以下の検証を実施する。
 - JWKS エンドポイント（`/.well-known/jwks.json`）を用いた JWT の署名検証（取得した公開鍵はプロセス内でキャッシュする）
 - `iss`（User PoolのIssuer）、`client_id`、`exp`（有効期限）、および `token_use=access` の妥当性検証
 - `sub` クレームの値を抽出して user_id として識別利用
+- `iat` と `exp` の判定では、Cognito との時計のずれとして60秒を許容する。コールバックは発行直後のトークンを検証するため、時計がわずかに遅れているだけで `iat` が未来と判定されるためである
 
 API の認可に使うのは Access Token のみである。Cognito が発行する Access Token には `aud` クレームが含まれないため、受取先の妥当性検証は `client_id` および `token_use` クレームを用いて行う。
 

@@ -71,7 +71,7 @@ def auth_env(monkeypatch):
 
 @pytest.fixture
 def make_id_token(rsa_key):
-    def _make(*, sub="user-123", audience=CLIENT_ID, token_use="id"):
+    def _make(*, sub="user-123", audience=CLIENT_ID, token_use="id", issued_in=0):
         now = datetime.now(UTC)
         claims = {
             "sub": sub,
@@ -80,7 +80,7 @@ def make_id_token(rsa_key):
             "token_use": token_use,
             "name": "山田 太郎",
             "email": "taro@example.com",
-            "iat": now,
+            "iat": now + timedelta(seconds=issued_in),
             "exp": now + timedelta(hours=1),
         }
         return jwt.encode(claims, rsa_key, algorithm="RS256")
@@ -225,6 +225,17 @@ def test_callback_rejects_invalid_request_without_exchange(
     assert res.status_code == 400
     assert fake.exchanged == []
     assert "__Host-access_token" not in set_cookies(res)
+
+
+def test_callback_accepts_id_token_issued_ahead_of_local_clock(
+    use_cognito, make_token, make_id_token, dynamodb_table
+):
+    # Cognitoの時計がわずかに進んでいると、発行直後のIDトークンのiatが未来になる
+    use_cognito(TokenSet(make_token(), make_id_token(issued_in=5), "refresh-1"))
+
+    res = callback("code=code-1&state=state-1", auth_tx(state="state-1"))
+
+    assert res.status_code == 302
 
 
 def test_callback_returns_400_when_exchange_fails(use_cognito):
