@@ -1,6 +1,6 @@
 # ADR-0010: トークンをlocalStorageへ保存する
 
-- Status: Accepted
+- Status: Superseded by [ADR-0018](./0018-token-storage-httponly-cookie.md)
 - Date: 2026-07-19
 
 ## Context
