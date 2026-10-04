@@ -96,7 +96,7 @@
 
 TanStack Queryは、ドキュメント一覧やチャット履歴などサーバー状態のキャッシュ管理に利用する。データ取得中・エラー状態のハンドリングや再取得ロジックを画面ごとに個別実装せず、共通基盤に集約する。
 
-axiosはREST APIの呼び出しに利用し、アクセストークンの自動付与処理をインターセプターへ集約する。なお、チャット応答のSSEはレスポンスの逐次読み込みが必要であり、axiosでは対応できないため fetch APIで実装する。
+axiosはREST APIの呼び出しに利用し、アクセストークンの期限切れ時の更新と再送をインターセプターへ集約する。なお、チャット応答のSSEはレスポンスの逐次読み込みが必要であり、axiosでは対応できないため fetch APIで実装する。
 
 ### 3.2 画面構成・ルーティング
 
@@ -108,9 +108,8 @@ axiosはREST APIの呼び出しに利用し、アクセストークンの自動�
 | /chat/{chat_id} | チャット詳細（チャット履歴から遷移） |
 | /user/{user_id} | ユーザー情報 + 該当ユーザーのチャット履歴 + アップロード履歴 |
 | /documents | ドキュメント管理（一覧取得・アップロード・取込・削除） |
-| /auth/callback | Cognito Hosted UIからのリダイレクト受け取り、認可コードのトークン交換 |
 
-未認証時は`/auth/callback`を除く全ルートでHosted UIへリダイレクトする。
+未認証時は全ルートでHosted UIへリダイレクトする。Hosted UIからのリダイレクトはapi-fnの`/api/auth/callback`が受け取るため、SPAにコールバック用の画面はない。
 
 チャット履歴は、社内のナレッジ共有を目的として全ユーザーに公開する。
 
@@ -130,7 +129,7 @@ SPAはビルド後の静的ファイルをS3へ配置し、CloudFront経由で�
 
 ## 4. 認証設計
 
-認証にはCognito User PoolのHosted UIを利用し、認可フローには Authorization Code + PKCEを採用する。PKCEはSPA向けのOAuth拡張規格であり、認可コードの横取り攻撃を防ぐ。
+認証にはCognito User PoolのHosted UIを利用し、認可フローには Authorization Code + PKCEを採用する。PKCEは認可コードの横取り攻撃を防ぐOAuthの拡張規格である。認可コードの交換とトークンの更新はapi-fnが行い、トークンはHttpOnly Cookieに保存する。
 
 認証フローの概要は以下の通り。
 
@@ -141,18 +140,22 @@ Cognito Hosted UI
 ↓
 Authorization Code + PKCE
 ↓
-Access Token
+api-fn
+↓
+HttpOnly Cookie
+↓
+CloudFront Function
 ↓
 Authorization Header
 ↓
 FastAPI
 ```
 
-SPAはHosted UIでの認証完了後、取得したAccess Tokenを `Authorization` ヘッダーに設定してFastAPIを呼び出す。
+api-fnは認可コードをトークンへ交換し、アクセストークンとリフレッシュトークンをHttpOnly Cookieとしてブラウザへ返す。JavaScriptからはトークンを読み取れないため、XSSが起きてもトークンを持ち出されない。APIへのリクエストでは、CloudFront FunctionがCookieの値を `Authorization` ヘッダーへ写し、API GatewayのオーソライザとFastAPIがこれを検証する。アクセストークンの期限が切れると、SPAは `/api/auth/refresh` で更新してからリクエストを送り直す。
 
-FastAPI側では、JWKS（JSON Web Key Set：署名検証用公開鍵のセット）を用いたJWT検証のみを行う。パスワード管理やJWT発行処理はバックエンド側には実装しない。ユーザー識別（user_id）にはJWTの `sub` クレームを使用し、独自ヘッダーによる識別は行わない。
+FastAPI側では、JWKS（JSON Web Key Set：署名検証用公開鍵のセット）を用いてJWTを検証する。Cognitoとのトークンのやり取りは行うが、パスワード管理やJWT発行処理はバックエンド側には実装しない。ユーザー識別（user_id）にはJWTの `sub` クレームを使用し、独自ヘッダーによる識別は行わない。
 
-ユーザー登録、トークンの取り扱い、ライブラリ選定、認可範囲の詳細設計は[authorization.md](./authorization.md)で管理する。トークンの保存先に関する判断理由は[ADR-0010](./adr/0010-token-storage-localstorage.md)に記載する。
+ユーザー登録、トークンの取り扱い、認可範囲の詳細設計は[authorization.md](./authorization.md)で管理する。トークンの保存先に関する判断理由は[ADR-0018](./adr/0018-token-storage-httponly-cookie.md)に記載する。
 
 ## 5. バックエンド設計
 
@@ -203,7 +206,7 @@ RAGパイプラインは既存実装を移植して使用する。移植に伴�
 
 SSEでは、LangGraphのノードごとのState更新通知を配信する。トークン単位のストリーミング配信は行わない。
 
-ストリーム配信は `POST /api/chats/stream` で行い、認証は `Authorization` ヘッダーを使用する。ブラウザ標準の EventSource を使用しない理由は[ADR-0012](./adr/0012-sse-post-with-authorization-header.md)に記載する。
+ストリーム配信は `POST /api/chats/stream` で行い、他のAPIと同じくCookieのアクセストークンで認証する。ブラウザ標準の EventSource を使用しない理由は[ADR-0012](./adr/0012-sse-post-with-authorization-header.md)に記載する。
 
 処理フローを実行する前に、当日の利用回数を1回消費する。上限に達している場合はステータスコード429を返し、Bedrockの呼び出しを行わない。上限値は1ユーザー当たり1日20回とし、環境変数 `CHAT_DAILY_QUOTA` で変更可能とする。
 
@@ -463,7 +466,7 @@ CloudFrontはリクエストパスに応じて以下の3つのオリジンへル
 
 ルートパスはSPAの静的コンテンツを格納したS3へルーティングし、`/api/*` はAPI Gatewayへ転送する。API側の2つのビヘイビアは同一のAPI Gatewayを指すが、SSEストリーミングと通常のREST APIでタイムアウトおよび圧縮の設定要件が異なるため、個別オリジンとして定義し、`/api/chats/stream` の優先評価を行う。どのLambda関数へルーティングするかはAPI Gateway側で判定する。
 
-API向けのビヘイビアではキャッシュを無効化し、`Host` ヘッダーを除く全てのビューワーヘッダーをオリジンへ転送する。これにより、Cognitoアクセストークンを含む `Authorization` ヘッダーがAPI Gatewayのオーソライザおよびバックエンドまで透過する。`Host` ヘッダーを転送対象外とするのは、API Gatewayが `Host` ヘッダーに基づいてAPIのルーティング識別を行うためである。
+API向けのビヘイビアではキャッシュを無効化し、`Host` ヘッダーを除く全てのビューワーヘッダーとCookieをオリジンへ転送する。また、viewer-requestのCloudFront Functionで、Cookieのアクセストークンを `Authorization` ヘッダーへ写す。API Gatewayのオーソライザはヘッダーしか検証できないためである。`Host` ヘッダーを転送対象外とするのは、API Gatewayが `Host` ヘッダーに基づいてAPIのルーティング識別を行うためである。
 
 SSEによるストリーミング配信は、Lambda、Lambda Web Adapter、API Gateway、CloudFrontのいずれかでレスポンスのバッファリングが発生すると正常に機能しない。そのため、chat-fn の通信経路には以下の設定を適用する。
 
@@ -484,7 +487,7 @@ SPAでのクライアントサイドルーティング実行時、/chats/{chatId
 
 S3向けビヘイビアに `ResponseHeadersPolicy` を適用し、セキュリティヘッダーを付与する。本設定はAPI向けビヘイビアには適用しない。CSPが有効に機能するのは、ブラウザがHTMLとしてレンダリングするSPAの通信経路のみだからである。
 
-CSP設定は、アクセストークンを localStorage に保存する設計([ADR-0010](./adr/0010-token-storage-localstorage.md))に対するセキュリティ補強策であり、万が一XSS脆弱性が存在した場合でも、不正スクリプトの実行や外部への情報送信を阻止することを目的とする。
+CSP設定は、万が一XSS脆弱性が存在した場合でも、不正スクリプトの実行や外部への情報送信を阻止することを目的とする。トークンはHttpOnly Cookieに保存しているためスクリプトからは読み取れないが、ページ上の情報やAPIの応答を外部へ送られる経路は残る。
 
 ```text
 default-src 'self';
@@ -520,12 +523,13 @@ Viteによるビルド成果物は外部JS/CSSファイルのみで構成され�
 
 API Gatewayは api-fn および chat-fn への唯一の公開アクセス経路であり、CloudFrontからの `/api/*` リクエストを受け取る。エンドポイントタイプは、前段にCloudFrontを配置する構成のため「リージョナル」を選択する。Lambda Function URLを採用しない理由は[ADR-0011](./adr/0011-api-gateway-migration.md)に記載する。
 
-API Gatewayの役割は、後続のLambda起動前に不正リクエストを遮断することである。Cognito User Poolオーソライザが `Authorization` ヘッダー内のアクセストークンを検証し、無効なトークンによるリクエストはLambdaへ到達させない。オーソライザを適用しない未認証エンドポイントは `/api/health` のみとする。各APIメソッドには認可スコープ `openid` を明示する。スコープ未指定の場合、オーソライザはトークンをIDトークンとして検証するため、アクセストークンを送信する本システムでは全リクエストが401エラーとなる。APIステージには レート: 20リクエスト/秒、バースト: 40リクエスト のスロットリング制限を設定し、有効トークンを用いた大量リクエスト攻撃に対する保護を行う。
+API Gatewayの役割は、後続のLambda起動前に不正リクエストを遮断することである。Cognito User Poolオーソライザが `Authorization` ヘッダー内のアクセストークンを検証し、無効なトークンによるリクエストはLambdaへ到達させない。オーソライザを適用しない未認証エンドポイントは `/api/health` と `/api/auth/*` とする。`/api/auth/*` は、期限切れのアクセストークンしか持たない状態でトークンを更新するために呼ばれる。各APIメソッドには認可スコープ `openid` を明示する。スコープ未指定の場合、オーソライザはトークンをIDトークンとして検証するため、アクセストークンを送信する本システムでは全リクエストが401エラーとなる。APIステージには レート: 20リクエスト/秒、バースト: 40リクエスト のスロットリング制限を設定し、有効トークンを用いた大量リクエスト攻撃に対する保護を行う。
 
 リソースは、FastAPIのルート構成に合わせて次のとおり定義する。
 
 ```text
 /api/health          GET   → api-fn (認可なし)
+/api/auth/{proxy+}   ANY   → api-fn (認可なし)
 /api/chats/stream    POST  → chat-fn
 /api/chats           ANY   → api-fn
 /api/chats/{proxy+}  ANY   → api-fn
@@ -659,14 +663,15 @@ Bedrockの推論費用は上記インフラ費用とは別に従量課金され�
 - [ADR-0007: 署名付きURLによる直接アップロードと取込の分離](./adr/0007-upload-ingest-separation.md)
 - [ADR-0008: APIキー管理にSSM Parameter Storeを採用](./adr/0008-ssm-parameter-store.md) — ADR-0016により失効
 - [ADR-0009: Lambda Function URLをCloudFront OACで保護しない](./adr/0009-function-url-no-oac.md) — ADR-0011により失効
-- [ADR-0010: トークンをlocalStorageへ保存する](./adr/0010-token-storage-localstorage.md)
+- [ADR-0010: トークンをlocalStorageへ保存する](./adr/0010-token-storage-localstorage.md) — ADR-0018により失効
 - [ADR-0011: api-fnとchat-fnの公開経路をAPI Gatewayへ移行する](./adr/0011-api-gateway-migration.md)
-- [ADR-0012: チャットのSSEをPOSTとAuthorizationヘッダーで配信する](./adr/0012-sse-post-with-authorization-header.md)
+- [ADR-0012: チャットのSSEをPOSTで配信する](./adr/0012-sse-post-with-authorization-header.md)
 - [ADR-0013: 独自ドメインはサブドメインで公開し、DNSをお名前.comに置く](./adr/0013-custom-domain-subdomain-external-dns.md)
 - [ADR-0014: X-Rayのアプリ内トレース処理をapi-fnとingest-fnに限定する](./adr/0014-xray-app-instrumentation-scope.md)
 - [ADR-0015: ドキュメントを物理削除し、ベクトルはキーの再構成で消す](./adr/0015-document-hard-delete.md)
 - [ADR-0016: 推論の呼び出し経路をAmazon Bedrockへ統一する](./adr/0016-bedrock-inference.md)
 - [ADR-0017: チャット利用量のデイリークォータ導入方針](./adr/0017-chat-daily-quota.md)
+- [ADR-0018: トークンをHttpOnly Cookieへ保存する](./adr/0018-token-storage-httponly-cookie.md)
 
 認証仕様の詳細およびコスト試算の根拠については、以下のドキュメントを参照のこと。
 

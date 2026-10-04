@@ -96,13 +96,9 @@ make dev       # frontend (:5173) と backend (:8000) を同時起動
 
 Vite 開発サーバーが `/api` へのリクエストを `localhost:8000` へプロキシするため、ローカル開発時も本番同様の同一オリジン構成で動作します。
 
-**フロントエンド設定**
-
-Cognito の設定値をビルド時に埋め込みます。`apps/frontend/.env.example` を `.env.local` にコピーし、DataStack の出力値を設定してください。
-
 **バックエンド設定**
 
-デプロイ済みの AWS リソースを直接参照します。`/api/health` 以外のエンドポイントの動作には、`TABLE_NAME`、`DOCUMENTS_BUCKET_NAME`、`INGEST_QUEUE_URL`、`VECTOR_INDEX_ARN`、`COGNITO_ISSUER`、`COGNITO_CLIENT_ID` などの環境変数および AWS 認証情報が必要です。
+デプロイ済みの AWS リソースを直接参照します。`/api/health` 以外のエンドポイントの動作には、`TABLE_NAME`、`DOCUMENTS_BUCKET_NAME`、`INGEST_QUEUE_URL`、`VECTOR_INDEX_ARN`、`COGNITO_ISSUER`、`COGNITO_CLIENT_ID`、`COGNITO_DOMAIN`、`APP_ORIGIN` などの環境変数および AWS 認証情報が必要です。サインインはバックエンドが Cognito とやり取りしてトークンを HttpOnly Cookie へ保存するため、フロントエンドに Cognito の設定は要りません。
 
 ```bash
 make lint      # eslint + prettier / ruff

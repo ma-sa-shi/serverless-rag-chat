@@ -19,11 +19,11 @@
 
 ### 1.1 目的と対象範囲
 
-本ドキュメントは、SPAが呼び出すバックエンドAPIの仕様を、呼び出し側から見た契約として定義する。対象は、api-fnとchat-fnが公開するFastAPIのルート（`/api`配下の全15エンドポイント）である。
+本ドキュメントは、SPAが呼び出すバックエンドAPIの仕様を、呼び出し側から見た契約として定義する。対象は、api-fnとchat-fnが公開するFastAPIのルート（`/api`配下の全20エンドポイント）である。
 
 以下は対象外とする。ただし、APIと組み合わせて使う手順は7章で扱う。
 
-- Cognitoの認可・トークンエンドポイント（[authorization.md](./authorization.md)）
+- Cognitoの認可・トークンエンドポイント。api-fnが呼び出し、SPAからは呼ばない（[authorization.md](./authorization.md)）
 - 署名付きURLによるS3への直接アクセス
 - api-fnからingest-fnへ渡すSQSメッセージ（内部の契約であり、SPAからは見えない）
 
@@ -32,7 +32,7 @@ FastAPIはOpenAPI定義を自動生成するが、本番環境では公開して
 ### 1.2 設計方針
 
 - **同一オリジンで配信する**：APIはSPAと同じドメインの`/api`配下でCloudFrontから配信する。そのため、CORSの設定を持たない。
-- **認証はJWTの検証のみ**：バックエンドはCognitoが発行したアクセストークンを検証するだけで、パスワードの管理やトークンの発行は行わない（[ADR-0004](./adr/0004-cognito-jwt-verification-only.md)）。
+- **トークンはHttpOnly Cookieで扱う**：バックエンドはCognitoとの間で認可コードの交換とトークンの更新・失効を行い、トークンをHttpOnly Cookieとしてブラウザへ返す。パスワードの管理やトークンの発行は行わない（[ADR-0018](./adr/0018-token-storage-httponly-cookie.md)）。
 - **閲覧は全員、変更は本人のみ**：社内のナレッジ共有を目的とするため、チャット、ドキュメント、プロフィールは認証済みの全ユーザーが閲覧できる。一方で、ドキュメントの完了登録、取込、削除は登録したユーザー本人に限る。
 - **ファイルはLambdaを経由しない**：アップロードと閲覧は署名付きURLでS3へ直接行い、APIはURLの発行と状態管理だけを担う（[ADR-0007](./adr/0007-upload-ingest-separation.md)）。
 - **一覧は要約、詳細は全部**：一覧APIは要約だけを返し、試行ごとの出力のような大きなデータは詳細APIでだけ返す。
@@ -53,6 +53,7 @@ SPA ─▶ CloudFront ─▶ API Gateway（REST、ステージ prod）─▶ Lam
 | API Gatewayのリソース | メソッド | 統合先 | オーソライザ |
 |------|------|------|------|
 | `/api/health` | GET | api-fn | なし |
+| `/api/auth/{proxy+}` | ANY | api-fn | なし |
 | `/api/chats/stream` | POST | chat-fn | あり |
 | `/api/chats` | ANY | api-fn | あり |
 | `/api/chats/{proxy+}` | ANY | api-fn | あり |
@@ -60,7 +61,7 @@ SPA ─▶ CloudFront ─▶ API Gateway（REST、ステージ prod）─▶ Lam
 
 API Gatewayは、グリーディパス（`{proxy+}`）より具体的なリソースを優先して照合する。そのため、`/api/chats/stream`だけがchat-fnへ渡り、`/api/users/...`や`/api/documents/...`は`/api/{proxy+}`で受けてapi-fnへ渡る。リソース定義の背景はarchitecture.mdの[9.3](./architecture.md#93-api-gateway)に記載している。
 
-CloudFrontはAPI向けのビヘイビアでキャッシュを無効化し、`Host`を除く全てのヘッダーをオリジンへ転送する。
+CloudFrontはAPI向けのビヘイビアでキャッシュを無効化し、`Host`を除く全てのヘッダーとCookieをオリジンへ転送する。また、viewer-requestのCloudFront Functionで、Cookieのアクセストークンを`Authorization`ヘッダーへ写す（[2.2](#22-認証)）。
 
 タイムアウトは関数によって異なる。
 
@@ -74,14 +75,18 @@ CloudFrontはAPI向けのビヘイビアでキャッシュを無効化し、`Hos
 
 ### 2.2 認証
 
-`/api/health`を除く全エンドポイントで、`Authorization: Bearer <アクセストークン>`を必須とする。IDトークンは受け付けない。トークンの取得と更新は[authorization.md](./authorization.md)に従う。
+`/api/health`と`/api/auth/*`を除く全エンドポイントで、アクセストークンを必須とする。IDトークンは受け付けない。トークンの取得と更新は[5.2](#52-認証)のエンドポイントで行い、詳細は[authorization.md](./authorization.md)に従う。
+
+アクセストークンは、ブラウザが`__Host-access_token` Cookieとして自動で送る。API GatewayのオーソライザはCookieを読めないため、CloudFront FunctionがCookieの値を`Authorization: Bearer <アクセストークン>`へ写す。ただし、リクエストが既に`Authorization`ヘッダーを持つ場合は書き換えない。CloudFrontを経由しないローカル開発では、FastAPIがCookieを直接読む。
 
 トークンはAPI GatewayとFastAPIの二段階で検証する。
 
 | 段階 | 検証内容 | 失敗時 |
 |------|------|------|
-| API Gateway（Cognitoオーソライザ） | 署名、有効期限、`openid`スコープの有無 | Lambdaを起動せずに401を返す |
-| FastAPI（`app/auth.py`） | JWKSによる署名、`iss`、`exp`、`token_use=access`、`client_id` | 401を返す |
+| API Gateway（Cognitoオーソライザ） | `Authorization`ヘッダーのトークンの署名、有効期限、`openid`スコープの有無 | Lambdaを起動せずに401を返す |
+| FastAPI（`app/auth.py`） | `Authorization`ヘッダー、無ければCookieのトークンについて、JWKSによる署名、`iss`、`exp`、`token_use=access`、`client_id` | 401を返す |
+
+更新系のリクエスト（POST、PUT、PATCH、DELETE）が`Origin`ヘッダーを持ち、その値がアプリのオリジン（環境変数`APP_ORIGIN`）と異なる場合、FastAPIは403を返す。Cookieは自動で送られるため、別サイトから送らせたリクエストを拒否するCSRF対策である。`Origin`を持たないリクエストはブラウザ以外のクライアントからのものであり、拒否しない。
 
 検証に通ると、FastAPIはトークンの`sub`クレームを呼び出したユーザーのIDとして使う。
 
@@ -103,9 +108,12 @@ CloudFrontはAPI向けのビヘイビアでキャッシュを無効化し、`Hos
 
 | ヘッダー | 方向 | 内容 |
 |----------|------|------|
-| `Authorization` | リクエスト | `Bearer <アクセストークン>`。`/api/health`以外で必須 |
+| `Cookie` | リクエスト | ブラウザが自動で送る。`__Host-access_token`はAPI全体へ、`__Secure-refresh_token`と`__Secure-auth_tx`は`/api/auth/*`へだけ送られる |
+| `Authorization` | リクエスト | `Bearer <アクセストークン>`。SPAは付けず、CloudFront FunctionがCookieから付与する。直接付けた場合はCookieより優先する |
+| `Origin` | リクエスト | 更新系のリクエストでブラウザが付ける。アプリのオリジンと異なれば403になる |
 | `Content-Type` | リクエスト | ボディを持つリクエストでは`application/json` |
 | `X-Request-Id` | レスポンス | リクエストごとのID。LambdaのリクエストIDを使い、ログとX-Rayのトレースにも同じ値を付与する。障害調査では、この値でログを検索する |
+| `Set-Cookie` | レスポンス | `/api/auth/*`のレスポンスでのみ、トークンを入れたCookieの発行と削除に使う |
 | `WWW-Authenticate` | レスポンス | FastAPIが返す401にのみ付与する。値は`Bearer` |
 | `Cache-Control` | レスポンス | SSEのレスポンスにのみ`no-cache`を付与する |
 
@@ -126,8 +134,9 @@ CloudFrontはAPI向けのビヘイビアでキャッシュを無効化し、`Hos
 
 | ステータス | 返却元 | 発生条件 | ボディの例 |
 |------------|--------|----------|------|
-| 401 | API Gateway | `Authorization`ヘッダーが無い、トークンの署名や有効期限が不正、`openid`スコープが無い | `{"message": "Unauthorized"}` |
+| 401 | API Gateway | アクセストークンのCookieも`Authorization`ヘッダーも無い、トークンの署名や有効期限が不正、`openid`スコープが無い | `{"message": "Unauthorized"}` |
 | 401 | FastAPI | API Gatewayの検証は通ったが、`token_use`や`client_id`が一致しない（同じユーザープールの別アプリクライアントが発行したトークンなど） | `{"detail": "Invalid authentication credentials"}` |
+| 403 | FastAPI | 更新系のリクエストの`Origin`がアプリのオリジンと異なる | `{"detail": "cross-origin request rejected"}` |
 | 404 | FastAPI | 定義されていないパス | `{"detail": "Not Found"}` |
 | 405 | FastAPI | パスは存在するが、メソッドが定義されていない | `{"detail": "Method Not Allowed"}` |
 | 422 | FastAPI | パラメータやボディが型や制約を満たさない | 下記を参照 |
@@ -182,20 +191,25 @@ SPAは`limit`を指定しないため、各一覧は最新50件まで表示さ�
 | No | メソッド | パス | 概要 | 実行関数 | 操作対象 |
 |----|----------|------|------|----------|----------|
 | 1 | GET | `/api/health` | ヘルスチェック | api-fn | なし（認証不要） |
-| 2 | POST | `/api/users/me` | 表示名とメールアドレスをキャッシュする | api-fn | 本人のデータのみ |
-| 3 | GET | `/api/users/{user_id}` | プロフィールを取得する | api-fn | 全ユーザーのデータ |
-| 4 | GET | `/api/users/{user_id}/quota` | 当日のチャット利用状況を取得する | api-fn | 全ユーザーのデータ |
-| 5 | GET | `/api/users/{user_id}/documents` | 指定ユーザーのドキュメント一覧を取得する | api-fn | 全ユーザーのデータ |
-| 6 | GET | `/api/users/{user_id}/chats` | 指定ユーザーのチャット一覧を取得する | api-fn | 全ユーザーのデータ |
-| 7 | GET | `/api/documents` | 全ユーザーのドキュメント一覧を取得する | api-fn | 全ユーザーのデータ |
-| 8 | POST | `/api/documents/upload-url` | ドキュメントを登録し、アップロード用URLを発行する | api-fn | 本人のデータのみ |
-| 9 | POST | `/api/documents/{document_id}/complete` | アップロードの完了を登録する | api-fn | 本人のデータのみ |
-| 10 | POST | `/api/documents/{document_id}/ingest` | 取込を開始する | api-fn | 本人のデータのみ |
-| 11 | DELETE | `/api/documents/{document_id}` | ドキュメントを削除する | api-fn | 本人のデータのみ |
-| 12 | GET | `/api/documents/{document_id}/download-url` | 閲覧用URLを発行する | api-fn | 全ユーザーのデータ |
-| 13 | GET | `/api/chats` | 全ユーザーのチャット一覧を取得する | api-fn | 全ユーザーのデータ |
-| 14 | GET | `/api/chats/{chat_id}` | チャットの詳細を取得する | api-fn | 全ユーザーのデータ |
-| 15 | POST | `/api/chats/stream` | 質問を送信し、回答生成の進行をSSEで受け取る | chat-fn | 本人のデータのみ |
+| 2 | GET | `/api/auth/login` | Hosted UIへリダイレクトし、サインインを始める | api-fn | なし（アクセストークン不要） |
+| 3 | GET | `/api/auth/callback` | 認可コードを交換し、トークンのCookieを発行する | api-fn | 本人のデータのみ（アクセストークン不要） |
+| 4 | POST | `/api/auth/refresh` | アクセストークンを更新する | api-fn | 本人のデータのみ（アクセストークン不要） |
+| 5 | POST | `/api/auth/logout` | トークンを失効させ、Cookieを削除する | api-fn | 本人のデータのみ（アクセストークン不要） |
+| 6 | GET | `/api/users/me` | サインイン中のユーザーのプロフィールを取得する | api-fn | 本人のデータのみ |
+| 7 | POST | `/api/users/me` | 表示名とメールアドレスをキャッシュする。切り替え前のSPAだけが呼ぶ | api-fn | 本人のデータのみ |
+| 8 | GET | `/api/users/{user_id}` | プロフィールを取得する | api-fn | 全ユーザーのデータ |
+| 9 | GET | `/api/users/{user_id}/quota` | 当日のチャット利用状況を取得する | api-fn | 全ユーザーのデータ |
+| 10 | GET | `/api/users/{user_id}/documents` | 指定ユーザーのドキュメント一覧を取得する | api-fn | 全ユーザーのデータ |
+| 11 | GET | `/api/users/{user_id}/chats` | 指定ユーザーのチャット一覧を取得する | api-fn | 全ユーザーのデータ |
+| 12 | GET | `/api/documents` | 全ユーザーのドキュメント一覧を取得する | api-fn | 全ユーザーのデータ |
+| 13 | POST | `/api/documents/upload-url` | ドキュメントを登録し、アップロード用URLを発行する | api-fn | 本人のデータのみ |
+| 14 | POST | `/api/documents/{document_id}/complete` | アップロードの完了を登録する | api-fn | 本人のデータのみ |
+| 15 | POST | `/api/documents/{document_id}/ingest` | 取込を開始する | api-fn | 本人のデータのみ |
+| 16 | DELETE | `/api/documents/{document_id}` | ドキュメントを削除する | api-fn | 本人のデータのみ |
+| 17 | GET | `/api/documents/{document_id}/download-url` | 閲覧用URLを発行する | api-fn | 全ユーザーのデータ |
+| 18 | GET | `/api/chats` | 全ユーザーのチャット一覧を取得する | api-fn | 全ユーザーのデータ |
+| 19 | GET | `/api/chats/{chat_id}` | チャットの詳細を取得する | api-fn | 全ユーザーのデータ |
+| 20 | POST | `/api/chats/stream` | 質問を送信し、回答生成の進行をSSEで受け取る | chat-fn | 本人のデータのみ |
 
 ## 4. リソースモデル
 
@@ -345,7 +359,7 @@ ChatSummaryに、次のフィールドを加えたものである。
 |------|------|
 | 概要 | FastAPIアプリケーションが起動し、リクエストに応答できることを確認する |
 | 実行関数 | api-fn |
-| 操作対象 | なし。認証を要求しない唯一のエンドポイントである |
+| 操作対象 | なし。トークンもCookieも要求しない唯一のエンドポイントである |
 | 冪等性 | 冪等。副作用を持たない |
 
 **リクエスト**
@@ -371,7 +385,180 @@ ChatSummaryに、次のフィールドを加えたものである。
 - DynamoDBやS3などのAWSリソースにはアクセスしない。そのため、200が保証するのはCloudFrontからFastAPIまでの経路が通じていることだけであり、依存リソースの正常性は保証しない。
 - AWSの設定値を必要としないため、ローカル環境でも環境変数を設定せずに応答する。
 
-### 5.2 ユーザー
+### 5.2 認証
+
+本節のエンドポイントにはAPI Gatewayのオーソライザを適用しない。アクセストークンの期限が切れた状態で呼ばれるためである。代わりに、`/api/auth`をPathに持つCookieでリクエストを識別する。Cookieの属性は[authorization.md](./authorization.md)に記載している。
+
+#### `GET /api/auth/login`
+
+| 項目 | 内容 |
+|------|------|
+| 概要 | PKCEのcode_verifierとstateを生成し、Cognito Hosted UIの認可エンドポイントへリダイレクトする |
+| 実行関数 | api-fn |
+| 操作対象 | なし |
+| 冪等性 | 冪等ではない。呼ぶたびに新しいstateとcode_verifierを生成し、`__Secure-auth_tx`を上書きする |
+
+**リクエスト**
+
+| 位置 | フィールド | 型 | 必須 | 制約 | 説明 |
+|------|------------|----|------|------|------|
+| query | returnTo | string | 任意 | `/`で始まり、`//`と`/\`で始まらないパス。それ以外は`/`に置き換える | サインイン後に戻る画面のパスとクエリ。既定値は`/` |
+
+SPAはfetchではなく、ブラウザの画面遷移でこのURLを開く。
+
+**レスポンス**（`302 Found`）
+
+| 項目 | 内容 |
+|------|------|
+| `Location` | Hosted UIの`/oauth2/authorize`。`client_id`、`redirect_uri`、`scope=openid email profile`、`state`、`code_challenge`、`code_challenge_method=S256`を付ける |
+| `Set-Cookie` | `__Secure-auth_tx`。state、code_verifier、`returnTo`をJSONにしてbase64urlで包んだ値。有効期限は10分 |
+
+**エラー**
+
+固有のエラーは無い。
+
+**備考**
+
+- `redirect_uri`は環境変数`APP_ORIGIN`から組み立て、リクエストの`Host`は使わない。CloudFrontがオリジンへ渡す`Host`はAPI Gatewayのドメインだからである。
+- `returnTo`をパスに限るのは、サインイン後に外部サイトへ誘導されるオープンリダイレクトを防ぐためである。
+
+#### `GET /api/auth/callback`
+
+| 項目 | 内容 |
+|------|------|
+| 概要 | Hosted UIからのリダイレクトを受け取り、認可コードをトークンへ交換してCookieを発行する |
+| 実行関数 | api-fn |
+| 操作対象 | 本人のデータのみ。IDトークンの`sub`のプロフィールを更新する |
+| 冪等性 | 冪等ではない。認可コードは1回しか交換できない |
+
+**リクエスト**
+
+| 位置 | フィールド | 型 | 必須 | 制約 | 説明 |
+|------|------------|----|------|------|------|
+| query | code | string | 必須 | なし | Cognitoが発行した認可コード |
+| query | state | string | 必須 | `__Secure-auth_tx`のstateと一致する | `GET /api/auth/login`で生成したstate |
+| query | error | string | 任意 | なし | Cognitoがサインインを拒否した場合に付く |
+| cookie | `__Secure-auth_tx` | string | 必須 | なし | `GET /api/auth/login`が発行したCookie |
+
+Cognitoがリダイレクトで呼び出すため、SPAから直接呼ぶことはない。
+
+**レスポンス**（`302 Found`）
+
+| 項目 | 内容 |
+|------|------|
+| `Location` | `__Secure-auth_tx`に保存した`returnTo` |
+| `Set-Cookie` | `__Host-access_token`（有効期限1時間）と`__Secure-refresh_token`（有効期限30日）を発行し、`__Secure-auth_tx`を削除する |
+
+**エラー**
+
+| ステータス | 発生条件 | detail |
+|------------|----------|--------|
+| 400 | `error`パラメータが付いている、`code`か`state`が無い、`__Secure-auth_tx`が無いか読めない、stateが一致しない | `"sign-in failed"` |
+| 400 | Cognitoが認可コードの交換を拒否した。使用済みのコードやPKCEの不一致など | `"sign-in failed"` |
+| 400 | IDトークンの検証に失敗した、またはリフレッシュトークンが返らなかった | `"sign-in failed"` |
+
+**備考**
+
+- IDトークンは、署名、`iss`、`exp`、`aud`が`client_id`と一致すること、`token_use=id`であることを検証する。そのうえで`name`と`email`をプロフィールへ保存し、IDトークン自体は保存しない。
+- stateを照合するのは、攻撃者の認可コードを使わせて、別人のアカウントへサインインさせる攻撃を防ぐためである。
+- 400のレスポンスはJSONであり、画面としては表示されない。利用者はトップページから開き直せば、改めてサインインできる。
+
+#### `POST /api/auth/refresh`
+
+| 項目 | 内容 |
+|------|------|
+| 概要 | リフレッシュトークンでアクセストークンを更新し、`__Host-access_token`を発行し直す |
+| 実行関数 | api-fn |
+| 操作対象 | 本人のデータのみ |
+| 冪等性 | 冪等。何回呼んでも、有効なアクセストークンを持つ状態になる |
+
+**リクエスト**
+
+ボディを持たない。`__Secure-refresh_token` Cookieをブラウザが送る。
+
+**レスポンス**（`204 No Content`）
+
+ボディを返さない。`Set-Cookie`で`__Host-access_token`を発行し直す。リフレッシュトークンは返らないため、`__Secure-refresh_token`はそのまま残る。
+
+**エラー**
+
+| ステータス | 発生条件 | detail |
+|------------|----------|--------|
+| 401 | `__Secure-refresh_token`が無い、またはCognitoが更新を拒否した（期限切れ、失効済み） | `"session expired"` |
+
+401のレスポンスでは、`__Host-access_token`と`__Secure-refresh_token`を削除する。
+
+**備考**
+
+- SPAは、APIが401を返したときにだけ呼ぶ。同時に401を受けた複数のリクエストは、1回の更新を共有する。
+- 更新に成功したら、元のリクエストを1回だけ送り直す。`POST /api/chats/stream`も同じである。401はグラフの実行前に返るため、送り直しても利用回数は二重に消費されない。
+
+#### `POST /api/auth/logout`
+
+| 項目 | 内容 |
+|------|------|
+| 概要 | リフレッシュトークンを失効させてCookieを削除し、Hosted UIのサインアウト先を返す |
+| 実行関数 | api-fn |
+| 操作対象 | 本人のデータのみ |
+| 冪等性 | 冪等。Cookieが無くても200を返す |
+
+**リクエスト**
+
+ボディを持たない。`__Secure-refresh_token` Cookieをブラウザが送る。
+
+**レスポンス**（`200 OK`）
+
+| フィールド | 型 | null許容 | 説明 |
+|------------|----|----------|------|
+| logoutUrl | string | 不可 | Hosted UIの`/logout`。`client_id`と`logout_uri`（アプリのオリジン）を付ける |
+
+```json
+{"logoutUrl": "https://<Hosted UIのドメイン>/logout?client_id=...&logout_uri=https%3A%2F%2Frag.business-efficiency.pro"}
+```
+
+`Set-Cookie`で`__Host-access_token`と`__Secure-refresh_token`を削除する。
+
+**エラー**
+
+固有のエラーは無い。
+
+**備考**
+
+- SPAはレスポンスを受け取った後、`logoutUrl`へ画面遷移する。Hosted UI側のセッションも破棄しないと、次のサインインでパスワードを求められずにサインインしてしまうためである。
+- Cognitoが失効を拒否した場合も、Cookieは削除して200を返す。リフレッシュトークンは有効期限で失効する。
+- 失効させるのはリフレッシュトークンだけである。発行済みのアクセストークンは、有効期限まで検証を通る（[8章](#8-既知の制約未対応事項)）。
+
+### 5.3 ユーザー
+
+#### `GET /api/users/me`
+
+| 項目 | 内容 |
+|------|------|
+| 概要 | サインイン中のユーザーのプロフィールを取得する |
+| 実行関数 | api-fn |
+| 操作対象 | 本人のデータのみ |
+| 冪等性 | 冪等。副作用を持たない |
+
+**リクエスト**
+
+パラメータ、ボディともに持たない。
+
+**レスポンス**（`200 OK`）
+
+[UserProfile](#userprofile)を返す。形式は`GET /api/users/{user_id}`と同じである。
+
+**エラー**
+
+| ステータス | 発生条件 | detail |
+|------------|----------|--------|
+| 404 | プロフィールが登録されていない | `"user not found"` |
+
+**備考**
+
+- SPAは読み込み時に呼び、認証済みかどうかの判定と、ヘッダーの表示名の表示に使う（[7.3](#73-spaの読み込み時)）。
+- プロフィールは`GET /api/auth/callback`が保存するため、サインインを経ていれば404にはならない。
+- 本ルートは`GET /api/users/{user_id}`より先に定義している。逆にすると、`me`がユーザーIDとして扱われる。
+
 
 #### `POST /api/users/me`
 
@@ -403,10 +590,10 @@ ChatSummaryに、次のフィールドを加えたものである。
 
 **備考**
 
-- 一覧APIで他ユーザーの表示名（`ownerName`）を返すために、`sub`と表示名の対応を保存する。バックエンドが受け取るのはアクセストークンだけであり、`name`クレームはIDトークンにしか含まれない。そのため、SPAがIDトークンから取り出して送信する。
+- 切り替え前のSPAだけが呼ぶ。現在のSPAは呼ばず、プロフィールは`GET /api/auth/callback`が保存する。切り替え前のSPAが使われなくなった後に削除する。
+- 一覧APIで他ユーザーの表示名（`ownerName`）を返すために、`sub`と表示名の対応を保存する。バックエンドが受け取るのはアクセストークンだけであり、`name`クレームはIDトークンにしか含まれない。そのため、切り替え前のSPAはIDトークンから取り出して送信していた。
 - 保存先のキーはトークンの`sub`で決まり、他ユーザーのプロフィールは上書きできない。ただし、ボディの値がIDトークン由来であることはサーバーでは検証できない。つまり、任意の表示名を名乗ることはできる（[8章](#8-既知の制約未対応事項)）。
 - `email`の形式を検証しないのは、マスタであるCognitoがユーザー作成時に検証済みのためである。ここで別の検証ルールを加えると、Cognitoが受け付けた値を弾く不整合が起こりうる。
-- 呼び出すタイミングは[7.2](#72-spaの読み込み時)に記載する。
 
 #### `GET /api/users/{user_id}`
 
@@ -447,8 +634,8 @@ ChatSummaryに、次のフィールドを加えたものである。
 
 - ユーザー情報画面（`/user/{user_id}`）で使う。
 - メールアドレスも全ユーザーに公開する。社内のメールアドレスを想定しているためである。
-- Cognitoにユーザーが存在していても、404になることがある。一度もサインインしていない場合と、SPAからの`POST /api/users/me`が失敗した場合である。SPAはこの送信の結果を確認しない。
-- キャッシュであるため、Cognito側で表示名を変更しても、すぐには反映されない。新しいIDトークンを取得した後に、SPAを読み込み直した時点で反映される。
+- Cognitoにユーザーが存在していても、一度もサインインしていなければ404になる。
+- キャッシュであるため、Cognito側で表示名を変更しても、すぐには反映されない。次にサインインした時点で反映される。
 
 #### `GET /api/users/{user_id}/quota`
 
@@ -570,7 +757,7 @@ ChatSummaryに、次のフィールドを加えたものである。
 - ユーザー情報画面のチャット履歴で使う。
 - `ownerName`を返さない理由と、存在しない`user_id`で空配列を返す点は、`GET /api/users/{user_id}/documents`と同じである。
 
-### 5.3 ドキュメント
+### 5.4 ドキュメント
 
 #### `GET /api/documents`
 
@@ -800,7 +987,7 @@ ChatSummaryに、次のフィールドを加えたものである。
 - ドキュメント一覧と、チャット詳細の参照ドキュメントから原本を開くときに使う。SPAはURLを新しいタブで開く。
 - ステータスを確認しないため、`uploading`のドキュメントにもURLを発行する。PUTが完了していなければ、URLを開いた時点でS3がエラーを返す。
 
-### 5.4 チャット
+### 5.5 チャット
 
 #### `GET /api/chats`
 
@@ -955,7 +1142,8 @@ ChatSummaryに、次のフィールドを加えたものである。
 
 - 利用回数は、Bedrockを呼び出す前に1回消費する。判定と加算を1回の条件付き更新で行うため、同時に送信しても上限を超えて消費されることはない。生成が途中で失敗した場合や、クライアントが切断した場合でも、消費した回数は戻さない（[ADR-0017](./adr/0017-chat-daily-quota.md)）。
 - 本ルートはchat-fnにだけ存在する。api-fnのイメージはLangChain系のライブラリを含まないため、api-fnでは本ルートを読み込まない（[ADR-0003](./adr/0003-single-dockerfile-three-lambdas.md)）。
-- GETとEventSourceではなくPOSTを使うのは、アクセストークンを`Authorization`ヘッダーで送り、URLに載せないためである（[ADR-0012](./adr/0012-sse-post-with-authorization-header.md)）。
+- GETとEventSourceではなくPOSTを使うのは、質問の長さがURLの制限を受けず、質問の本文をURLに載せないためである（[ADR-0012](./adr/0012-sse-post-with-authorization-header.md)）。
+- 401を受けた場合、SPAは`POST /api/auth/refresh`で更新してから1回だけ送り直す。
 
 ## 6. SSE仕様
 
@@ -965,8 +1153,8 @@ ChatSummaryに、次のフィールドを加えたものである。
 
 | 項目 | 仕様 |
 |------|------|
-| リクエスト | `POST`。`Authorization`、`Content-Type: application/json`を付ける |
-| クライアント | ブラウザ標準のEventSourceは使わない。GETしか扱えず、ヘッダーも付けられないためである。SPAはfetchでレスポンスボディを読み進め、SSEを自前で解析する |
+| リクエスト | `POST`。`Content-Type: application/json`を付ける。アクセストークンはCookieで送る |
+| クライアント | ブラウザ標準のEventSourceは使わない。GETしか扱えず、質問をボディで送れないためである。SPAはfetchでレスポンスボディを読み進め、SSEを自前で解析する |
 | レスポンスヘッダー | `Content-Type: text/event-stream`、`Cache-Control: no-cache`、`X-Request-Id` |
 | イベントの形式 | `event: <イベント名>`と`data: <JSON>`の2行と、空行で1イベントとする |
 | 再接続 | 行わない。ストリームが切れた場合は失敗として扱い、利用者が質問を送り直す |
@@ -1070,15 +1258,31 @@ data: {"chatId": "01K0R9WJH2T4Q6ZB8XN3E5VM7C", "finalGrade": "useful", "retryCou
 
 処理の全体像はarchitecture.mdの[6.1](./architecture.md#61-アップロードフロー)と[6.2](./architecture.md#62-取込フロー)に記載している。
 
-### 7.2 SPAの読み込み時
+### 7.2 サインインとトークンの更新
 
-SPAは、認証済みの状態で読み込まれたときに`POST /api/users/me`を1回呼び、IDトークンの表示名とメールアドレスを送る。
+サインインはブラウザの画面遷移で行い、トークンはCookieでやり取りする。SPAのJavaScriptがトークンを扱うことはない。
 
-呼ぶのはサインインの直後に限らない。ページの再読み込みや新しいタブで開いた場合も、localStorageに保存したトークンで認証済みになるため、同じように呼ぶ。一方で、SPA内の画面遷移では呼ばない。
+```text
+① GET  /api/auth/login?returnTo=<今のパス>  → Hosted UIへリダイレクトする
+② （Hosted UIでサインインする）              → /api/auth/callback へリダイレクトされる
+③ GET  /api/auth/callback                  → Cookieを発行し、returnTo へリダイレクトする
+   …… アクセストークンの期限が切れる ……
+④ 任意のAPI                                 → 401
+⑤ POST /api/auth/refresh                   → 204。アクセストークンのCookieを発行し直す
+⑥ ④のAPIを送り直す
+```
 
-SPAはこの呼び出しの結果を確認しない。失敗した場合はプロフィールが登録されず、表示名がnullになったり、`GET /api/users/{user_id}`が404になったりする。
+⑤が401になった場合、リフレッシュトークンも期限切れか失効済みである。SPAは、画面の読み込み時であれば①へ遷移し、操作中であれば再読み込みを促すメッセージを表示する。入力中の質問などを失わせないためである。
 
-### 7.3 チャットの送信
+サインアウトでは`POST /api/auth/logout`を呼び、返された`logoutUrl`へ画面遷移する。
+
+### 7.3 SPAの読み込み時
+
+SPAは読み込まれると`GET /api/users/me`を1回呼ぶ。200であれば、レスポンスをサインイン中のユーザーとして画面全体で使う。401であれば、[7.2](#72-サインインとトークンの更新)の①へ遷移する。
+
+ページの再読み込みや新しいタブで開いた場合も、Cookieはタブ間で共有されるため、サインインし直さずに表示できる。一方で、SPA内の画面遷移では呼び直さない。
+
+### 7.4 チャットの送信
 
 ```text
 ① GET  /api/users/{自分のsub}/quota     → 残り回数を表示する
@@ -1098,8 +1302,9 @@ SPAはこの呼び出しの結果を確認しない。失敗した場合はプ�
 | エラー形式が統一されていない | FastAPIの`{"detail": ...}`、422の配列、API Gatewayの`{"message": ...}`、500の`text/plain`が混在する | 返却元ごとの既定形式に従っている。クライアントは`detail`が文字列のときだけメッセージとして使う |
 | APIのバージョニングが無い | パスにバージョンを含まない | APIの利用者が同じリポジトリのSPAだけであり、同時に更新できる |
 | OpenAPIを公開していない | FastAPIは`/docs`と`/openapi.json`を生成するが、`/api`の外にあるため、API Gatewayから到達できない | 利用者がSPAだけのため公開しない。仕様は本ドキュメントで管理する |
-| 表示名はクライアントの申告を信頼している | `POST /api/users/me`のボディがIDトークン由来であることを検証しない。そのため、正規のユーザーは任意の表示名を名乗れる | 社内利用で、ユーザーは管理者が作成する。改善するには、IDトークン自体を送らせて署名を検証するか、CognitoのAdminGetUserで取得する |
-| `POST /api/users/me`のメソッド | 冪等な上書き登録であり、意味の上では`PUT`が適切である | 動作には影響しない |
+| 表示名はクライアントの申告を信頼している | `POST /api/users/me`のボディがIDトークン由来であることを検証しない。そのため、正規のユーザーは任意の表示名を名乗れる | 切り替え前のSPAのために残しているルートであり、切り替え後に削除する。現在のSPAでは、`GET /api/auth/callback`が検証済みのIDトークンから保存する |
+| `/api/auth/*`は未認証で到達できる | オーソライザを適用しないため、トークンを持たないリクエストでもapi-fnが起動する | 期限切れのアクセストークンで更新を呼ぶ必要がある。上限はステージのスロットリングで抑える |
+| サインアウト後もアクセストークンが有効 | 失効させるのはリフレッシュトークンだけであり、アクセストークンは署名の検証だけで通る。サインアウト前にCookieの値を写し取っていれば、最長1時間はAPIを呼べる | アクセストークンはHttpOnly Cookieにあり、JavaScriptからは読み取れない。即時の失効にはサーバー側のセッションが必要になる |
 | 存在しない`user_id`を区別しない | 一覧と利用状況のAPIは、存在しない`user_id`でも空配列や`used: 0`を返す。`GET /api/users/{user_id}`だけが404を返す | 存在を確認する追加の読み取りを省いている |
 | 他ユーザーのドキュメントの変更は404 | 本人に限る操作で他ユーザーのドキュメントを指定すると、403ではなく404を返す | 所有者の確認を「本人のパーティションに存在するか」で行っているためである。ただし、ドキュメントの存在自体は一覧で公開している |
 | 完了登録でS3を確認しない | `complete`はS3のオブジェクトの有無を確認しない | 存在しない場合は取込が`failed`になり、利用者が気づける |

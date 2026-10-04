@@ -13,7 +13,7 @@ Internal RAG chat app on AWS serverless. Design lives in `docs/architecture.md` 
 - Zero fixed cost: no VPC, NAT, ECS/EC2/Aurora, or Provisioned Concurrency.
 - Only chat-fn loads LangChain libraries.
 - Files go from the SPA to S3 via presigned URLs, never through Lambda.
-- The backend only verifies Cognito JWTs; never handle passwords or issue tokens.
+- The backend exchanges, refreshes, and revokes Cognito tokens and stores them in HttpOnly cookies (ADR-0018); never handle passwords or issue tokens.
 - CI workflows never run `cdk deploy`; infrastructure changes are applied manually.
 
 ## Code style
