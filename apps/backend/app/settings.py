@@ -10,6 +10,10 @@ class Settings:
     # (例: ingest-fnはHTTPを受けないためCognitoの設定を持たない)
     cognito_issuer: str
     cognito_client_id: str
+    # Hosted UIのベースURL。認可コードの交換やトークンの更新に使い、api-fnだけが持つ
+    cognito_domain: str
+    # Cognitoへ渡すリダイレクト先とCSRF検証の基準。リクエストのHostはAPI Gatewayを指す為使わない
+    app_origin: str
     table_name: str
     documents_bucket_name: str
     ingest_queue_url: str
@@ -27,6 +31,8 @@ def get_settings() -> Settings:
     return Settings(
         cognito_issuer=os.environ.get("COGNITO_ISSUER", ""),
         cognito_client_id=os.environ.get("COGNITO_CLIENT_ID", ""),
+        cognito_domain=os.environ.get("COGNITO_DOMAIN", ""),
+        app_origin=os.environ.get("APP_ORIGIN", ""),
         table_name=os.environ["TABLE_NAME"],
         documents_bucket_name=os.environ.get("DOCUMENTS_BUCKET_NAME", ""),
         ingest_queue_url=os.environ.get("INGEST_QUEUE_URL", ""),

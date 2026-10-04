@@ -80,6 +80,33 @@ def test_unknown_user_returns_404(make_token, dynamodb_table):
     assert res.status_code == 404
 
 
+def test_me_returns_signed_in_users_profile(make_token, dynamodb_table):
+    post_me(
+        make_token(sub="user-abc"),
+        {"displayName": "山田 太郎", "email": "taro@example.com"},
+    )
+
+    res = client.get(
+        "/api/users/me",
+        headers={"Authorization": f"Bearer {make_token(sub='user-abc')}"},
+    )
+    assert res.status_code == 200
+    assert res.json()["userId"] == "user-abc"
+    assert res.json()["displayName"] == "山田 太郎"
+
+
+def test_me_without_profile_returns_404(make_token, dynamodb_table):
+    res = client.get(
+        "/api/users/me",
+        headers={"Authorization": f"Bearer {make_token(sub='user-new')}"},
+    )
+    assert res.status_code == 404
+
+
+def test_me_requires_authentication(dynamodb_table):
+    assert client.get("/api/users/me").status_code == 401
+
+
 def get_quota(token: str | None, user_id: str):
     headers = {} if token is None else {"Authorization": f"Bearer {token}"}
     return client.get(f"/api/users/{user_id}/quota", headers=headers)

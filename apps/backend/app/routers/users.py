@@ -48,6 +48,19 @@ def upsert_me(
     repository.upsert_profile(user_id, body.display_name, body.email)
 
 
+# `/{user_id}`より先に定義しないと、"me"がユーザーIDとして扱われる
+@router.get("/me")
+def get_me(
+    user_id: Annotated[str, Depends(get_current_user_id)],
+    repository: Annotated[UserRepository, Depends(get_user_repository)],
+) -> UserResponse:
+    """サインイン中のユーザーのプロフィールを返す。サインイン時に同期済みである。"""
+    profile = repository.get_profile(user_id)
+    if profile is None:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, detail="user not found")
+    return UserResponse.model_validate({**profile, "userId": user_id})
+
+
 @router.get("/{user_id}")
 def get_user(
     user_id: str,

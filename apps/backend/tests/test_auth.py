@@ -31,6 +31,29 @@ def test_valid_token_returns_sub_as_user_id(make_token):
     assert res.json() == {"user_id": "user-abc"}
 
 
+def test_access_token_cookie_is_accepted_without_header(make_token):
+    token = make_token(sub="user-cookie")
+    res = client.get("/protected", headers={"Cookie": f"__Host-access_token={token}"})
+    assert res.status_code == 200
+    assert res.json() == {"user_id": "user-cookie"}
+
+
+def test_header_takes_precedence_over_cookie(make_token):
+    res = client.get(
+        "/protected",
+        headers={
+            "Authorization": f"Bearer {make_token(sub='user-header')}",
+            "Cookie": f"__Host-access_token={make_token(sub='user-cookie')}",
+        },
+    )
+    assert res.json() == {"user_id": "user-header"}
+
+
+def test_invalid_cookie_returns_401():
+    res = client.get("/protected", headers={"Cookie": "__Host-access_token=not-a-jwt"})
+    assert res.status_code == 401
+
+
 def test_missing_header_returns_401(make_token):
     res = get(None)
     assert res.status_code == 401
