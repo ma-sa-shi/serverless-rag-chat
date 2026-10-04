@@ -172,20 +172,45 @@ describe('APIルーティング', () => {
   });
 });
 
+// FunctionAssociationsのFunctionARNはFn::GetAttで、関数の論理IDを指す
+function associatedFunctionCode(associations: any[]): string[] {
+  const functions = template.findResources('AWS::CloudFront::Function');
+  return associations.map(
+    (a) => functions[a.FunctionARN['Fn::GetAtt'][0]].Properties.FunctionCode,
+  );
+}
+
+describe('アクセストークンの受け渡し(ADR-0018)', () => {
+  test('API系ビヘイビアはCookieのアクセストークンをAuthorizationへ写す', () => {
+    for (const behavior of distributionConfig.CacheBehaviors) {
+      expect(behavior.FunctionAssociations).toEqual([
+        { EventType: 'viewer-request', FunctionARN: expect.anything() },
+      ]);
+      const [code] = associatedFunctionCode(behavior.FunctionAssociations);
+      expect(code).toContain("request.cookies['__Host-access_token']");
+      // 既存のAuthorizationヘッダーは上書きしない
+      expect(code).toContain('!request.headers.authorization');
+    }
+  });
+});
+
 describe('SPAルーティング', () => {
   test('拡張子なしのURIをindex.htmlへ書き換えるCloudFront Functionを持つ', () => {
-    template.resourceCountIs('AWS::CloudFront::Function', 1);
-    const [fn] = Object.values(template.findResources('AWS::CloudFront::Function'));
-    expect(fn.Properties.FunctionCode).toContain("request.uri = '/index.html'");
+    const [code] = associatedFunctionCode(
+      distributionConfig.DefaultCacheBehavior.FunctionAssociations,
+    );
+    expect(code).toContain("request.uri = '/index.html'");
   });
 
-  test('CloudFront Functionはデフォルトビヘイビアにのみ適用する', () => {
+  test('書き換えのCloudFront Functionはデフォルトビヘイビアにのみ適用する', () => {
     expect(distributionConfig.DefaultCacheBehavior.FunctionAssociations).toEqual([
       { EventType: 'viewer-request', FunctionARN: expect.anything() },
     ]);
     // API側に適用するとJSONレスポンスまでindex.htmlへ書き換わる
     for (const behavior of distributionConfig.CacheBehaviors) {
-      expect(behavior.FunctionAssociations).toBeUndefined();
+      for (const code of associatedFunctionCode(behavior.FunctionAssociations)) {
+        expect(code).not.toContain('/index.html');
+      }
     }
   });
 

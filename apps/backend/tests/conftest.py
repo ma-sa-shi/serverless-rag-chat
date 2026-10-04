@@ -122,6 +122,7 @@ def make_token(rsa_key):
         client_id=CLIENT_ID,
         token_use="access",
         expires_in=3600,
+        issued_in=0,
         key=None,
     ):
         now = datetime.now(UTC)
@@ -130,7 +131,7 @@ def make_token(rsa_key):
             "iss": issuer,
             "client_id": client_id,
             "token_use": token_use,
-            "iat": now,
+            "iat": now + timedelta(seconds=issued_in),
             "exp": now + timedelta(seconds=expires_in),
         }
         return jwt.encode(claims, key or rsa_key, algorithm="RS256")

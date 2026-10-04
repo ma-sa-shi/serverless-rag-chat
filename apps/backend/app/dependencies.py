@@ -4,6 +4,7 @@ from typing import Annotated
 
 from fastapi import Depends
 
+from app.cognito import CognitoClient
 from app.ingest_queue import IngestQueue
 from app.repositories.chats import ChatRepository
 from app.repositories.documents import DocumentRepository
@@ -54,3 +55,9 @@ def get_ingest_queue(
     settings: Annotated[Settings, Depends(get_settings)],
 ) -> IngestQueue:
     return IngestQueue(settings.ingest_queue_url)
+
+
+def get_cognito_client(
+    settings: Annotated[Settings, Depends(get_settings)],
+) -> CognitoClient:
+    return CognitoClient(settings.cognito_domain, settings.cognito_client_id)

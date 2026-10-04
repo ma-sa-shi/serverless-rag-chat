@@ -26,7 +26,7 @@ Thumbs.db
 # Claude Code
 .claude/settings.local.json
 .claude/skills/issue/
-.claude/skills/plan/
+.claude/skills/impl-plan/
 
 # 起票前の下書き。GitHub上のIssueが正であり、リポジトリには残さない
 docs/issues/

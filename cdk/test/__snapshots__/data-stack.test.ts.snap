@@ -8,6 +8,24 @@ exports[`スナップショット 1`] = `
         "Ref": "AlarmTopicD01E77F9",
       },
     },
+    "CognitoDomain": {
+      "Value": {
+        "Fn::Join": [
+          "",
+          [
+            "https://",
+            {
+              "Ref": "UserPoolHostedUiDomainE021B0B6",
+            },
+            ".auth.",
+            {
+              "Ref": "AWS::Region",
+            },
+            ".amazoncognito.com",
+          ],
+        ],
+      },
+    },
     "CognitoIssuer": {
       "Value": {
         "Fn::GetAtt": [
@@ -423,6 +441,7 @@ exports[`スナップショット 1`] = `
           "profile",
         ],
         "CallbackURLs": [
+          "http://localhost:5173/api/auth/callback",
           "http://localhost:5173/auth/callback",
         ],
         "GenerateSecret": false,

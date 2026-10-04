@@ -1,43 +1,33 @@
+import axios from "axios";
 import { useEffect, useRef, type ReactNode } from "react";
-import { hasAuthParams, useAuth } from "react-oidc-context";
-import { api } from "../api/client";
+import { redirectToSignin } from "./session";
+import { useCurrentUser } from "./useCurrentUser";
 
 export function RequireAuth({ children }: { children: ReactNode }) {
-  const auth = useAuth();
-  // StrictModeの二重実行やstate更新による多重リダイレクト・多重送信を防ぐ
-  const triedSignin = useRef(false);
-  const syncedProfile = useRef(false);
+  const currentUser = useCurrentUser();
+  // StrictModeの二重実行で多重にリダイレクトしないようにする
+  const redirected = useRef(false);
+  const unauthenticated =
+    axios.isAxiosError(currentUser.error) &&
+    currentUser.error.response?.status === 401;
 
-  // 未認証ならHosted UIへリダイレクトする
+  // 更新にも失敗した場合だけ401が届く。Hosted UIでサインインし直してもらう
   useEffect(() => {
-    if (
-      !hasAuthParams() &&
-      !auth.isAuthenticated &&
-      !auth.activeNavigator &&
-      !auth.isLoading &&
-      !triedSignin.current
-    ) {
-      triedSignin.current = true;
-      void auth.signinRedirect();
+    if (unauthenticated && !redirected.current) {
+      redirected.current = true;
+      redirectToSignin();
     }
-  }, [auth]);
+  }, [unauthenticated]);
 
-  // サインイン時にIDトークンの表示名とメールをDynamoDBへ同期する(冪等)
-  useEffect(() => {
-    if (auth.isAuthenticated && auth.user && !syncedProfile.current) {
-      syncedProfile.current = true;
-      void api.post("/users/me", {
-        displayName: auth.user.profile.name,
-        email: auth.user.profile.email,
-      });
-    }
-  }, [auth.isAuthenticated, auth.user]);
-
-  if (auth.error) {
-    return <p>認証エラーが発生しました: {auth.error.message}</p>;
-  }
-  if (!auth.isAuthenticated) {
+  if (currentUser.isPending || unauthenticated) {
     return <p>サインインしています…</p>;
+  }
+  if (currentUser.isError) {
+    return (
+      <p>
+        ユーザー情報を取得できませんでした。ページを再読み込みしてください。
+      </p>
+    );
   }
   return children;
 }

@@ -2,7 +2,7 @@
 
 - Status: Accepted
 - Date: 2026-08-02
-- Updated: 2026-08-13
+- Updated: 2026-10-04
 
 ## Context
 
@@ -21,7 +21,7 @@ SSEを配信する条件は揃っている。統合の`responseTransferMode`はa
 
 api-fnとchat-fnの公開経路を、REST APIのリージョナルエンドポイントへ移行する。CloudFrontの`/api/*`のOriginをAPI Gatewayへ変更し、切り替え後にFunction URLを削除する。
 
-理由は、不正なリクエストをLambdaの起動前に拒否できることである。API GatewayのCognito User Poolオーソライザは、統合を呼び出す前にJWTの署名と有効期限を検証する。そのため、無効なトークンのリクエストはLambdaへ到達せず、実行回数を消費しない。オーソライザは無認証の`/api/health`を除く全ルートへ適用する。ステージのスロットリングにより、有効なトークンを持つリクエストにもレートの上限を設ける。
+理由は、不正なリクエストをLambdaの起動前に拒否できることである。API GatewayのCognito User Poolオーソライザは、統合を呼び出す前にJWTの署名と有効期限を検証する。そのため、無効なトークンのリクエストはLambdaへ到達せず、実行回数を消費しない。オーソライザは無認証の`/api/health`と`/api/auth/*`を除く全ルートへ適用する。`/api/auth/*`は、期限切れのアクセストークンしか持たない状態でトークンを更新するために呼ばれる。ステージのスロットリングにより、有効なトークンを持つリクエストにもレートの上限を設ける。
 
 `/api/chats/stream`をchat-fnへ、それ以外をapi-fnへ振り分ける。SSEは統合の`responseTransferMode`をSTREAMにして配信する。統合タイムアウトはストリーム全体の上限となるため、chat-fnのLambdaタイムアウトに合わせる。
 
@@ -37,7 +37,7 @@ API GatewayにCloudFrontからのアクセスのみを許可するリソース�
 
 - 無効なトークンのリクエストがLambdaへ到達せず、実行回数と実行時間が課金されない
 - スロットリングにより、有効なトークンを用いた大量リクエストにも上限を設けられる
-- SPAの実装は変わらない。引き続き`Authorization: Bearer`でアクセストークンを送る
+- SPAの実装は変わらない。アクセストークンはHttpOnly Cookieで届くが、CloudFront Functionが`Authorization`ヘッダーへ写すため、オーソライザはヘッダーを検証するだけでよい。Cookieへの移行はADR-0018に記載する
 
 デメリット・制約
 

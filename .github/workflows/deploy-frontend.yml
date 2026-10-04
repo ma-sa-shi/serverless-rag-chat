@@ -39,22 +39,6 @@ jobs:
           # 想定外のアカウントで解決された場合にデプロイ前で落とす
           allowed-account-ids: ${{ secrets.AWS_ACCOUNT_ID }}
 
-      # Cognitoを作り直しても同期ずれが起きないよう、GitHub側へ値を複製せず
-      # DataStackの出力から取得する
-      - name: Resolve Cognito settings from DataStack
-        run: |
-          outputs=$(aws cloudformation describe-stacks \
-            --stack-name DataStack \
-            --query 'Stacks[0].Outputs' --output json)
-          read_output() {
-            echo "$outputs" | jq -er --arg key "$1" \
-              '.[] | select(.OutputKey == $key) | .OutputValue'
-          }
-          {
-            echo "VITE_COGNITO_AUTHORITY=$(read_output CognitoIssuer)"
-            echo "VITE_COGNITO_CLIENT_ID=$(read_output UserPoolClientId)"
-          } >> "$GITHUB_ENV"
-
       - name: Resolve delivery targets from EdgeStack
         run: |
           outputs=$(aws cloudformation describe-stacks \

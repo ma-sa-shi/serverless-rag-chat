@@ -4,25 +4,35 @@ import { MemoryRouter } from "react-router-dom";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { Layout } from "../../src/components/Layout";
 
-const signoutRedirect = vi.fn();
-const removeUser = vi.fn();
+const signOut = vi.fn();
+vi.mock("../../src/auth/session", () => ({
+  signOut: () => signOut(),
+}));
 
-vi.mock("react-oidc-context", () => ({
-  useAuth: () => ({
-    user: { profile: { sub: "user-1", name: "テストユーザー" } },
-    settings: { client_id: "test-client" },
-    signoutRedirect,
-    removeUser,
+vi.mock("../../src/auth/useCurrentUser", () => ({
+  useCurrentUser: () => ({
+    data: { userId: "user-1", displayName: "テストユーザー" },
   }),
 }));
 
 describe("Layout", () => {
   beforeEach(() => {
-    signoutRedirect.mockReset();
-    removeUser.mockReset();
+    signOut.mockReset();
   });
 
-  it("サインアウトはCognitoの/logoutが要求するパラメータでsignoutRedirectに任せる", async () => {
+  it("サインイン中のユーザーの表示名からユーザー画面へリンクする", () => {
+    render(
+      <MemoryRouter>
+        <Layout />
+      </MemoryRouter>,
+    );
+
+    expect(
+      screen.getByRole("link", { name: "テストユーザー" }),
+    ).toHaveAttribute("href", "/user/user-1");
+  });
+
+  it("サインアウトボタンでsignOutを呼ぶ", async () => {
     render(
       <MemoryRouter>
         <Layout />
@@ -31,13 +41,6 @@ describe("Layout", () => {
 
     await userEvent.click(screen.getByRole("button", { name: "サインアウト" }));
 
-    expect(signoutRedirect).toHaveBeenCalledWith({
-      extraQueryParams: {
-        client_id: "test-client",
-        logout_uri: window.location.origin,
-      },
-    });
-    // 先にトークンを消すとRequireAuthのサインインリダイレクトと競合する
-    expect(removeUser).not.toHaveBeenCalled();
+    expect(signOut).toHaveBeenCalledTimes(1);
   });
 });

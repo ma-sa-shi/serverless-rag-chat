@@ -3,14 +3,22 @@ import { streamChat } from "../../src/api/chats";
 import type { ChatStreamEvent } from "../../src/api/chats";
 import { streamOf } from "../helpers/stream";
 
-// userManagerはimport時に実物のUserManagerを構築し、window.localStorageとVITE_COGNITO_*を触る
-const getUser = vi.fn();
-vi.mock("../../src/auth/userManager", () => ({
-  userManager: { getUser: () => getUser() },
+const refreshSession = vi.fn<() => Promise<boolean>>();
+vi.mock("../../src/auth/session", () => ({
+  refreshSession: () => refreshSession(),
 }));
 
 const INTERRUPTED_MESSAGE =
   "回答の生成が中断されました。もう一度お試しください。";
+
+function stubFetchSequence(...responses: Response[]) {
+  const fetchMock = vi.fn<typeof fetch>();
+  for (const response of responses) {
+    fetchMock.mockResolvedValueOnce(response);
+  }
+  vi.stubGlobal("fetch", fetchMock);
+  return fetchMock;
+}
 
 function stubFetch(response: Response | Error) {
   const fetchMock = vi.fn<typeof fetch>(() => {
@@ -31,7 +39,7 @@ function collector() {
 }
 
 beforeEach(() => {
-  getUser.mockResolvedValue({ access_token: "token-abc" });
+  refreshSession.mockResolvedValue(true);
 });
 
 afterEach(() => {
@@ -80,7 +88,7 @@ describe("streamChat", () => {
     expect(events).toHaveLength(1);
   });
 
-  it("アクセストークンがあればAuthorizationヘッダーを付ける", async () => {
+  it("トークンはCookieに任せ、Authorizationヘッダーを付けない", async () => {
     const fetchMock = stubFetch(
       sseResponse(
         'event: done\ndata: {"chatId":"c","finalGrade":null,"retryCount":0}\n\n',
@@ -95,25 +103,51 @@ describe("streamChat", () => {
       headers: {
         "Content-Type": "application/json",
         Accept: "text/event-stream",
-        Authorization: "Bearer token-abc",
       },
       body: JSON.stringify({ question: "質問" }),
       signal,
     });
   });
 
-  it("サインインしていなければAuthorizationヘッダーを付けない", async () => {
-    getUser.mockResolvedValue(null);
-    const fetchMock = stubFetch(
+  it("401ならセッションを更新して1回だけ送り直す", async () => {
+    const fetchMock = stubFetchSequence(
+      new Response("", { status: 401 }),
       sseResponse(
         'event: done\ndata: {"chatId":"c","finalGrade":null,"retryCount":0}\n\n',
       ),
     );
+    const { events, onEvent } = collector();
 
-    await streamChat("質問", collector().onEvent, new AbortController().signal);
+    await streamChat("質問", onEvent, new AbortController().signal);
 
-    const [, init] = fetchMock.mock.calls[0];
-    expect(init?.headers).not.toHaveProperty("Authorization");
+    expect(refreshSession).toHaveBeenCalledTimes(1);
+    expect(fetchMock).toHaveBeenCalledTimes(2);
+    expect(events).toEqual([
+      { type: "done", chatId: "c", finalGrade: null, retryCount: 0 },
+    ]);
+  });
+
+  it("更新に失敗したら送り直さず認証切れの案内をthrowする", async () => {
+    refreshSession.mockResolvedValue(false);
+    const fetchMock = stubFetch(new Response("", { status: 401 }));
+
+    await expect(
+      streamChat("質問", collector().onEvent, new AbortController().signal),
+    ).rejects.toThrow("認証の有効期限が切れた可能性があります。");
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+  });
+
+  it("送り直しも401なら再度は更新しない", async () => {
+    const fetchMock = stubFetchSequence(
+      new Response("", { status: 401 }),
+      new Response("", { status: 401 }),
+    );
+
+    await expect(
+      streamChat("質問", collector().onEvent, new AbortController().signal),
+    ).rejects.toThrow("認証の有効期限が切れた可能性があります。");
+    expect(refreshSession).toHaveBeenCalledTimes(1);
+    expect(fetchMock).toHaveBeenCalledTimes(2);
   });
 
   it("errorイベントでリクエストID付きのエラーをthrowする", async () => {
@@ -129,6 +163,7 @@ describe("streamChat", () => {
   });
 
   it("401と403のレスポンスで認証切れの案内をthrowする", async () => {
+    refreshSession.mockResolvedValue(false);
     for (const status of [401, 403]) {
       stubFetch(new Response("", { status }));
 

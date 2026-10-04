@@ -2,39 +2,44 @@
 
 - 親ドキュメント: [architecture.md](./architecture.md)
 
-本ドキュメントでは、architecture.mdにおける認証・認可設計の詳細仕様を定義する。認証基盤の選定理由はADR-0004に、トークン保存方針の決定理由はADR-0010にそれぞれ記載している。
+本ドキュメントでは、architecture.mdにおける認証・認可設計の詳細仕様を定義する。認証基盤の選定理由はADR-0004に、トークン保存方針の決定理由はADR-0018にそれぞれ記載している。
 
 ## 設計方針
 
-本システムでは、認証処理を Amazon Cognito に委譲し、バックエンド（FastAPI）側では JWT の検証処理のみを行う。
+本システムでは、認証処理を Amazon Cognito に委譲する。バックエンド（FastAPI）は Cognito とのトークンのやり取りと JWT の検証を行い、トークンを HttpOnly Cookie に保存する。
 
 - 認証方式には OAuth 2.0 Authorization Code Flow + PKCE を採用する
-- SPA 側の認証機能は `react-oidc-context` を用いて実装する
-- 取得したトークンは localStorage に保存する
-- FastAPI では JWKS によるアクセストークンの検証のみを行い、パスワード管理、トークン発行、およびセッション管理機能は実装しない
+- 認可コードの交換、トークンの更新と失効は api-fn が行い、SPA は Cognito と直接通信しない
+- 取得したトークンは HttpOnly Cookie に保存し、JavaScript からは読み取らせない
+- FastAPI はパスワード管理とトークン発行を実装しない。サーバー側にセッションも持たない
 
 ## 認証フロー
 
 ```text
 SPA（未認証）
-    │ ⓪code_verifierを生成し、SHA-256でハッシュ化したcode_challengeをCognitoの認可エンドポイントへ送信する。
-    │
+    │ ⓪/api/auth/login へ遷移する。
+    ▼
+api-fn（/api/auth/login）
+    │ ①code_verifier と state を生成して Cookie に保存し、SHA-256 でハッシュ化した code_challenge を付けて Cognito の認可エンドポイントへリダイレクトする。
     ▼
 Cognito Hosted UI
-    │ ①メールアドレスとパスワードによる認証成功後、認可コードを付与して redirect_uri へリダイレクトする。
+    │ ②メールアドレスとパスワードによる認証成功後、認可コードを付与して /api/auth/callback へリダイレクトする。
     ▼
-/auth/callback?code=...
-    │ ②認可コードと code_verifier を Cognito のトークンエンドポイントへ送信する。
-    ▼
-Cognito Token Endpoint
-    │ ③code_verifier と code_challenge の一致を検証し、各トークン（access_token / id_token / refresh_token）を発行する。
+api-fn（/api/auth/callback）
+    │ ③state を照合し、認可コードと code_verifier を Cognito のトークンエンドポイントへ送信して各トークンを受け取る。
+    │ ④ID Token を検証して表示名とメールアドレスを DynamoDB へ同期し、Access Token と Refresh Token を Cookie に保存して元の画面へリダイレクトする。
     ▼
 SPA
-    │ ④トークンを localStorage に保存し、以降の API リクエスト時に Authorization ヘッダーへ JWT を付与して送信する。
+    │ ⑤以降の API リクエストでは、ブラウザが Cookie を自動で送信する。
     ▼
-FastAPI
-      ⑤JWKS による署名検証を実施し、iss / client_id / exp / token_use=access を検証した上で sub を user_id として利用する。
+CloudFront Function
+    │ ⑥Cookie の Access Token を Authorization ヘッダーへ写す。
+    ▼
+API Gateway オーソライザ / FastAPI
+      ⑦JWKS による署名検証を実施し、iss / client_id / exp / token_use=access を検証した上で sub を user_id として利用する。
 ```
+
+ローカル開発では CloudFront を経由しないため、FastAPI が Cookie から Access Token を直接読む。Authorization ヘッダーがある場合はそちらを優先する。
 
 ---
 
@@ -46,7 +51,7 @@ FastAPI
 ## IdP連携
 
 初期導入時は Cognito によるメールアドレス・パスワード認証を採用し、Google Workspace や Microsoft Entra ID 等との SAML / OIDC 連携機能は必要に応じて後から追加する方針とする。
-フロントエンド側では標準 OIDC クライアントライブラリを採用しているため、将来的な IdP 追加時にも SPA 側の改修は設定変更のみで完了する。
+外部 IdP との連携は Hosted UI が担うため、IdP を追加しても SPA と api-fn の改修は不要であり、Cognito の設定変更のみで完了する。
 
 ---
 
@@ -54,57 +59,72 @@ FastAPI
 
 | Token | 有効期限 | 用途 |
 |-------|---------|------|
-| Access Token | 1時間（Cognito既定値） | API リクエスト時の Authorization ヘッダーに使用 |
-| ID Token | 1時間（Cognito既定値） | SPA 画面上でのユーザー表示名およびメールアドレス表示にのみ使用 |
-| Refresh Token | 30日 | Access Token および ID Token の自動更新に使用 |
+| Access Token | 1時間（Cognito既定値） | API リクエストの認証に使用 |
+| ID Token | 1時間（Cognito既定値） | サインイン時のプロフィール同期にのみ使用し、保存しない |
+| Refresh Token | 30日 | Access Token の更新に使用 |
 
-- Access Token および ID Token は、`react-oidc-context` の `automaticSilentRenew` 機能により自動更新される。
-- Refresh Token はタブの破棄後も localStorage に保持されるため、トークン更新は Refresh Token Grant フローによって実行される。iframe を使用したサイレントサインインを行わない構成のため、サードパーティ Cookie に対するブラウザの制限仕様の影響を受けない。
-- Refresh Token の有効期限切れ（失効）が発生した場合のみ、Hosted UI 画面へ自動リダイレクトして再認証を促す。
-
----
-
-## SPA実装
-
-認証処理には `react-oidc-context` ライブラリを使用する。設定情報は `apps/frontend/src/auth/userManager.ts` の `UserManager` インスタンスへ集約し、AuthProvider および axios インターセプター間で同一インスタンスを共有する。認可コード受取用のリダイレクト先エンドポイントは `/auth/callback` とし、要求するスコープ（Scope）は `openid email profile` とする（profile スコープはユーザー表示名の取得に必要となる）。
-
-### ライブラリ選定理由
-
-Authorization Code Flow や PKCE フローを自前で実装することによるセキュリティリスクを回避し、検証済みの標準ライブラリに処理を委譲することが安全であると判断した。また、`react-oidc-context` は React 向けに AuthProvider コンポーネントおよび useAuth フックを提供しており、認証状態をコンポーネントツリー全体へ容易に組み込むことができる。さらに標準 OIDC クライアント規格に準拠しているため、将来的な IdP 変更時にも特定ベンダーへロックインされず、SPA 側の変更を設定更新のみに抑えられるメリットがある。
-
-### 採用を見送った代替案
-
-| 代替案 | 見送り理由 |
-|--------|-----------|
-| AWS Amplify (Auth) | 単一の認証機能を実現するために、Amplify 固有の設定体系および巨大なランタイムライブラリを導入する必要が生じるため |
-| `amazon-cognito-identity-js` | 独自ログインフォームの構築を前提としたライブラリであり、Hosted UI を活用する設計方針と合致しないため |
-| PKCE自前実装 | Authorization Code Flow + PKCE フローの自作は実装の不備に伴うセキュリティリスクが高いため |
+- Access Token の期限が切れると API は401を返す。SPA は `POST /api/auth/refresh` を呼んで Access Token を更新し、元のリクエストを1回だけ送り直す。同時に401を受けた複数のリクエストは1回の更新を共有する。
+- 更新にも失敗した場合、画面の表示時はサインインへ遷移させ、操作中は再読み込みを促すメッセージを表示する。
+- Cookie はタブ間で共有されるため、1つのタブで更新した Access Token を他のタブもそのまま使える。
 
 ---
 
-## トークン保存方針
+## Cookie仕様
 
-`oidc-client-ts` の `WebStorageStateStore` を利用し、トークンを localStorage に保存する。本構成は、ページリロード時や複数タブ間でのセッション永続化・共有を優先した選択である。選定理由の詳細、XSS リスクの許容範囲、および sessionStorage や HttpOnly Cookie との比較検討についてはADR-0010に記載している。
+| Cookie | 値 | Path | SameSite | 有効期限 |
+|--------|----|------|----------|---------|
+| `__Host-access_token` | Access Token | `/` | Strict | 1時間 |
+| `__Secure-refresh_token` | Refresh Token | `/api/auth` | Strict | 30日 |
+| `__Secure-auth_tx` | state、code_verifier、サインイン後の遷移先 | `/api/auth` | Lax | 10分 |
+
+- すべての Cookie に HttpOnly と Secure を付け、Domain は指定しない。
+- `__Secure-auth_tx` だけを Lax とするのは、Cognito から戻るコールバックが別サイトからの遷移であり、Strict では送信されないためである。
+- サインイン後の遷移先は、`/` で始まり `//` で始まらないパスだけを受け付ける。外部サイトへのオープンリダイレクトを防ぐためである。
+
+---
+
+## エンドポイント
+
+| エンドポイント | 処理 |
+|---------------|------|
+| `GET /api/auth/login?returnTo=` | Hosted UI の認可エンドポイントへリダイレクトする |
+| `GET /api/auth/callback` | 認可コードを交換し、Cookie を発行して `returnTo` へリダイレクトする |
+| `POST /api/auth/refresh` | Access Token の Cookie を更新する。失敗時は Cookie を削除して401を返す |
+| `POST /api/auth/logout` | Refresh Token を失効させて Cookie を削除し、Cognito の `/logout` の URL を返す |
+| `GET /api/users/me` | サインイン中のユーザーのプロフィールを返す |
+
+`/api/auth/*` には API Gateway のオーソライザを適用しない。期限切れの Access Token しか持たない状態で呼ばれるためである。Cognito へ渡すリダイレクト先は環境変数 `APP_ORIGIN` から組み立て、リクエストの Host は使わない。CloudFront がオリジンへ渡す Host は API Gateway のドメインだからである。
+
+---
+
+## CSRF対策
+
+- Access Token と Refresh Token の Cookie を SameSite=Strict とし、別サイトから始まるリクエストには送信させない。
+- POST・PUT・PATCH・DELETE のリクエストが `Origin` ヘッダーを持ち、その値が `APP_ORIGIN` と異なる場合は403を返す。
+- サインインの開始とコールバックでは state を照合し、攻撃者の認可コードで別人のアカウントへサインインさせる攻撃を防ぐ。
 
 ---
 
 ## サインアウト
 
 - アプリケーションヘッダー内にサインアウトボタンを配置する（独立したサインアウトルートは作成しない）
-- サインアウト実行時は localStorage 内のトークン情報を破棄した上で、Cognito の `/logout` エンドポイントへリダイレクトして Hosted UI 側のセッションも同時に破棄する。
+- サインアウト実行時は `POST /api/auth/logout` で Refresh Token を失効させて Cookie を削除し、返された Cognito の `/logout` へ遷移して Hosted UI 側のセッションも破棄する。
 - サインアウト完了後のリダイレクト先はルートパス（/）とする。
 
 ---
 
 ## バックエンド検証
 
-FastAPI では、以下の検証処理のみを実施する。
+FastAPI では、Access Token に対して以下の検証を実施する。
 
 - JWKS エンドポイント（`/.well-known/jwks.json`）を用いた JWT の署名検証（取得した公開鍵はプロセス内でキャッシュする）
 - `iss`（User PoolのIssuer）、`client_id`、`exp`（有効期限）、および `token_use=access` の妥当性検証
 - `sub` クレームの値を抽出して user_id として識別利用
+- `iat` と `exp` の判定では、Cognito との時計のずれとして60秒を許容する。コールバックは発行直後のトークンを検証するため、時計がわずかに遅れているだけで `iat` が未来と判定されるためである
 
-バックエンドでの検証対象は Access Token であり、ID Token は検証しない。ID Token はユーザー属性を SPA 側に伝達するためのものであり、API 実行認可に使用するトークンではないためである。なお、Cognito が発行する Access Token には `aud` クレームが含まれないため、受取先の妥当性検証は `client_id` および `token_use` クレームを用いて行う。
+API の認可に使うのは Access Token のみである。Cognito が発行する Access Token には `aud` クレームが含まれないため、受取先の妥当性検証は `client_id` および `token_use` クレームを用いて行う。
+
+ID Token はサインイン時のコールバックでのみ検証する。署名と `iss`、`exp` に加え、`aud` が `client_id` と一致すること、`token_use=id` であることを確かめた上で、`name` と `email` を DynamoDB のプロフィールへ同期する。
 
 ---
 

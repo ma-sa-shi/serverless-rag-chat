@@ -97,6 +97,26 @@ describe('Lambda', () => {
     expect(ingestFn.Properties.Environment.Variables).not.toHaveProperty('COGNITO_ISSUER');
   });
 
+  test('api-fnはサインインに使うHosted UIのドメインを持つ', () => {
+    const [, fn] = findFunctionByServiceName('api');
+    expect(fn.Properties.Environment.Variables).toHaveProperty('COGNITO_DOMAIN');
+  });
+
+  test('api-fnとchat-fnはappDomainコンテキストからアプリのオリジンを受け取る', () => {
+    const app = new cdk.App({ context: { appDomain: 'rag.example.com' } });
+    const dataStack = new DataStack(app, 'TestDataStackWithDomain');
+    const appStack = new AppStack(app, 'TestAppStackWithDomain', { dataStack });
+    const functions = Template.fromStack(appStack).findResources(
+      'AWS::Lambda::Function',
+    );
+    const origins = Object.values(functions)
+      .map((fn) => fn.Properties.Environment.Variables)
+      .filter((env) => env.POWERTOOLS_SERVICE_NAME !== 'ingest')
+      .map((env) => env.APP_ORIGIN);
+    // Cognitoのリダイレクト先とCSRF検証の基準になる
+    expect(origins).toEqual(['https://rag.example.com', 'https://rag.example.com']);
+  });
+
   test('chat-fnは1024MB/300秒でストリーミングとBedrockのモデルIDを設定する', () => {
     const [, fn] = findFunctionByServiceName('chat');
     expect(fn.Properties.MemorySize).toBe(1024);
@@ -217,6 +237,8 @@ describe('API Gateway', () => {
       new Set([
         '/api',
         '/api/health',
+        '/api/auth',
+        '/api/auth/{proxy+}',
         '/api/chats',
         '/api/chats/stream',
         '/api/chats/{proxy+}',
@@ -269,9 +291,10 @@ describe('API Gateway', () => {
     expect(uriOf('ANY /api/chats')).toBe(apiUri);
     expect(uriOf('ANY /api/chats/{proxy+}')).toBe(apiUri);
     expect(uriOf('GET /api/health')).toBe(apiUri);
+    expect(uriOf('ANY /api/auth/{proxy+}')).toBe(apiUri);
   });
 
-  test('Cognitoオーソライザが/api/health以外の全ルートへ適用される', () => {
+  test('Cognitoオーソライザが/api/healthと/api/auth以外の全ルートへ適用される', () => {
     template.resourceCountIs('AWS::ApiGateway::Authorizer', 1);
     template.hasResourceProperties('AWS::ApiGateway::Authorizer', {
       Type: 'COGNITO_USER_POOLS',
@@ -280,7 +303,8 @@ describe('API Gateway', () => {
     });
 
     for (const [key, props] of methodsByPath()) {
-      if (key === 'GET /api/health') {
+      // 更新は期限切れのアクセストークンしか持たない状態で呼ばれる(ADR-0018)
+      if (key === 'GET /api/health' || key === 'ANY /api/auth/{proxy+}') {
         expect(props.AuthorizationType).toBe('NONE');
         expect(props.AuthorizerId).toBeUndefined();
       } else {

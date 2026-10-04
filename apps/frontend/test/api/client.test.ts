@@ -1,61 +1,92 @@
-import type { InternalAxiosRequestConfig } from "axios";
+import { AxiosError, type InternalAxiosRequestConfig } from "axios";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { api } from "../../src/api/client";
 
-const getUser = vi.fn();
-vi.mock("../../src/auth/userManager", () => ({
-  userManager: { getUser: () => getUser() },
+const refreshSession = vi.fn<() => Promise<boolean>>();
+vi.mock("../../src/auth/session", () => ({
+  refreshSession: () => refreshSession(),
 }));
 
-/** インターセプタは戻り値の関数ではない為、送信直前のconfigをアダプタで捕まえる。 */
-function captureRequestConfig() {
-  let captured: InternalAxiosRequestConfig | undefined;
+/** 指定した順にステータスを返すアダプタを差し込み、送信したconfigを記録する。 */
+function respondWith(...statuses: number[]) {
+  const sent: InternalAxiosRequestConfig[] = [];
   api.defaults.adapter = (config) => {
-    captured = config;
-    return Promise.resolve({
+    sent.push(config);
+    const status = statuses[sent.length - 1];
+    const response = {
       data: {},
-      status: 200,
-      statusText: "OK",
+      status,
+      statusText: "",
       headers: {},
       config,
-    });
+    };
+    if (status >= 400) {
+      return Promise.reject(
+        new AxiosError("failed", undefined, config, undefined, response),
+      );
+    }
+    return Promise.resolve(response);
   };
-  return () => captured;
+  return sent;
 }
 
 beforeEach(() => {
-  getUser.mockReset();
+  refreshSession.mockReset();
 });
 
 afterEach(() => {
   delete api.defaults.adapter;
 });
 
-describe("apiのリクエストインターセプタ", () => {
-  it("アクセストークンをAuthorizationヘッダーへ載せる", async () => {
-    getUser.mockResolvedValue({ access_token: "token-abc" });
-    const config = captureRequestConfig();
+describe("api", () => {
+  it("baseURLに/apiを使い、Authorizationヘッダーを付けない", async () => {
+    const sent = respondWith(200);
 
     await api.get("/documents");
 
-    expect(config()?.headers.Authorization).toBe("Bearer token-abc");
+    expect(sent[0].baseURL).toBe("/api");
+    // アクセストークンはHttpOnly Cookieでブラウザが送る(ADR-0018)
+    expect(sent[0].headers.Authorization).toBeUndefined();
   });
 
-  it("サインインしていなければヘッダーを付けない", async () => {
-    getUser.mockResolvedValue(null);
-    const config = captureRequestConfig();
+  it("401ならセッションを更新して1回だけ送り直す", async () => {
+    refreshSession.mockResolvedValue(true);
+    const sent = respondWith(401, 200);
 
-    await api.get("/documents");
+    const res = await api.get("/documents");
 
-    expect(config()?.headers.Authorization).toBeUndefined();
+    expect(res.status).toBe(200);
+    expect(refreshSession).toHaveBeenCalledTimes(1);
+    expect(sent).toHaveLength(2);
   });
 
-  it("baseURLに/apiを使う", async () => {
-    getUser.mockResolvedValue(null);
-    const config = captureRequestConfig();
+  it("更新に失敗したら送り直さず401を投げる", async () => {
+    refreshSession.mockResolvedValue(false);
+    const sent = respondWith(401);
 
-    await api.get("/documents");
+    await expect(api.get("/documents")).rejects.toMatchObject({
+      response: { status: 401 },
+    });
+    expect(sent).toHaveLength(1);
+  });
 
-    expect(config()?.baseURL).toBe("/api");
+  it("送り直しも401なら再度は更新しない", async () => {
+    refreshSession.mockResolvedValue(true);
+    const sent = respondWith(401, 401);
+
+    await expect(api.get("/documents")).rejects.toMatchObject({
+      response: { status: 401 },
+    });
+    expect(refreshSession).toHaveBeenCalledTimes(1);
+    expect(sent).toHaveLength(2);
+  });
+
+  it("401以外のエラーは更新せずそのまま投げる", async () => {
+    respondWith(403);
+
+    await expect(api.get("/documents")).rejects.toMatchObject({
+      response: { status: 403 },
+    });
+    expect(refreshSession).not.toHaveBeenCalled();
   });
 });

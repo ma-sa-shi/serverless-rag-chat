@@ -1,7 +1,6 @@
 import { Route, Routes } from "react-router-dom";
 import { RequireAuth } from "./auth/RequireAuth";
 import { Layout } from "./components/Layout";
-import { AuthCallback } from "./pages/AuthCallback";
 import { ChatDetail } from "./pages/ChatDetail";
 import { Documents } from "./pages/Documents";
 import { Home } from "./pages/Home";
@@ -11,8 +10,6 @@ import { UserDetail } from "./pages/UserDetail";
 function App() {
   return (
     <Routes>
-      {/* 認証コールバック処理中は未認証状態のため、RequireAuth配下に置くとリダイレクトループが発生する */}
-      <Route path="/auth/callback" element={<AuthCallback />} />
       <Route
         element={
           <RequireAuth>

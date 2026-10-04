@@ -2,6 +2,7 @@
 
 - Status: Accepted
 - Date: 2026-07-18
+- Updated: 2026-10-04
 
 ## Context
 
@@ -10,6 +11,8 @@
 ## Decision
 
 Cognito User PoolのHosted UIを利用し、Authorization Code + PKCEフローで認証する。FastAPIはアクセストークンのJWT検証とユーザー識別のみを行い、パスワード管理やJWT発行は実装しない。
+
+ただし、ADR-0018によりバックエンドの責務を広げた。api-fnが認可コードの交換、トークンの更新と失効をCognitoとの間で行い、トークンをHttpOnly Cookieとして発行する。トークンを発行するのは引き続きCognitoであり、パスワードも扱わない。
 
 採用理由は、認証情報の保管と発行をマネージドサービスへ委譲でき、招待制で登録する社内ユーザーの規模ではCognitoの無料枠内で運用できるためである。認証フローや画面遷移、ユーザー登録、トークン保存、ライブラリ選定などの詳細は[authorization.md](../authorization.md)に記載する。
 

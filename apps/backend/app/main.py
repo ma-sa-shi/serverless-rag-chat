@@ -3,10 +3,12 @@ import json
 import uuid
 from typing import Any
 
-from fastapi import APIRouter, FastAPI, Request
+from fastapi import APIRouter, FastAPI, Request, status
+from fastapi.responses import JSONResponse
 
 from app.logger import logger
-from app.routers import chats, documents, users
+from app.routers import auth, chats, documents, users
+from app.settings import get_settings
 from app.tracer import restore_trace_context, traced_request
 
 # 末尾スラッシュの自動リダイレクトを無効化する。
@@ -29,6 +31,31 @@ def _lambda_context(request: Request) -> dict[str, Any]:
     except json.JSONDecodeError:
         return {}
     return context if isinstance(context, dict) else {}
+
+
+UNSAFE_METHODS = frozenset({"POST", "PUT", "PATCH", "DELETE"})
+
+
+# 後に登録したミドルウェアほど外側で動く。拒否もリクエストIDを付けて記録させる為、ログより先に登録する
+@app.middleware("http")
+async def reject_cross_origin_writes(request: Request, call_next):
+    """CookieはSameSite=Strictだが、別オリジンからの更新系リクエストも明示的に拒否する(ADR-0018)。
+
+    ブラウザは更新系のリクエストへOriginを必ず付ける。Originを持たないのはcurlなどブラウザ以外の
+    クライアントであり、CSRFの経路にならない為通す。
+    """
+    origin = request.headers.get("origin")
+    if (
+        request.method in UNSAFE_METHODS
+        and origin is not None
+        and origin != get_settings().app_origin
+    ):
+        logger.warning("cross-origin write rejected", origin=origin)
+        return JSONResponse(
+            {"detail": "cross-origin request rejected"},
+            status_code=status.HTTP_403_FORBIDDEN,
+        )
+    return await call_next(request)
 
 
 @app.middleware("http")
@@ -65,6 +92,7 @@ def health():
     return {"status": "ok"}
 
 
+router.include_router(auth.router)
 router.include_router(users.router)
 router.include_router(documents.router)
 router.include_router(chats.router)

@@ -99,6 +99,8 @@ describe('appDomainコンテキスト', () => {
   test('CognitoのコールバックURLへCloudFrontドメインが追加される', () => {
     contextTemplate.hasResourceProperties('AWS::Cognito::UserPoolClient', {
       CallbackURLs: [
+        'http://localhost:5173/api/auth/callback',
+        `https://${appDomain}/api/auth/callback`,
         'http://localhost:5173/auth/callback',
         `https://${appDomain}/auth/callback`,
       ],
@@ -230,7 +232,10 @@ describe('Cognito', () => {
       AllowedOAuthFlowsUserPoolClient: true,
       AllowedOAuthScopes: ['openid', 'email', 'profile'],
       // appDomain未指定時はローカル開発のURLのみ
-      CallbackURLs: ['http://localhost:5173/auth/callback'],
+      CallbackURLs: [
+        'http://localhost:5173/api/auth/callback',
+        'http://localhost:5173/auth/callback',
+      ],
       LogoutURLs: ['http://localhost:5173'],
       PreventUserExistenceErrors: 'ENABLED',
     });
