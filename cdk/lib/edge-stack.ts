@@ -61,7 +61,28 @@ export class EdgeStack extends cdk.Stack {
       keepaliveTimeout: cdk.Duration.seconds(20),
     });
 
-    // APIレスポンスはキャッシュせず、Authorizationヘッダー(Cognito JWT)を素通しする。
+    // アクセストークンはHttpOnly Cookieで届くが、API GatewayのCognitoオーソライザは
+    // ヘッダーしか読めない為、Authorizationヘッダーへ写す(ADR-0018)。
+    // Authorizationを既に持つリクエストは、そのトークンで検証させる
+    const accessTokenFunction = new cloudfront.Function(
+      this,
+      "AccessTokenToAuthorization",
+      {
+        runtime: cloudfront.FunctionRuntime.JS_2_0,
+        code: cloudfront.FunctionCode.fromInline(`
+function handler(event) {
+  var request = event.request;
+  var cookie = request.cookies['__Host-access_token'];
+  if (cookie && !request.headers.authorization) {
+    request.headers.authorization = { value: 'Bearer ' + cookie.value };
+  }
+  return request;
+}
+`),
+      },
+    );
+
+    // APIレスポンスはキャッシュせず、CookieとAuthorizationヘッダー(Cognito JWT)を素通しする。
     // Authorizationは、API GatewayのCognitoオーソライザとFastAPIのJWT検証の両方が読む。
     // ALL_VIEWER_EXCEPT_HOST_HEADERはHostだけを落とす。
     // API GatewayはHostでAPIを識別する為、ビューワーのHostを転送すると到達できない
@@ -71,6 +92,12 @@ export class EdgeStack extends cdk.Stack {
       cachePolicy: cloudfront.CachePolicy.CACHING_DISABLED,
       originRequestPolicy:
         cloudfront.OriginRequestPolicy.ALL_VIEWER_EXCEPT_HOST_HEADER,
+      functionAssociations: [
+        {
+          function: accessTokenFunction,
+          eventType: cloudfront.FunctionEventType.VIEWER_REQUEST,
+        },
+      ],
     };
 
     // React Routerのクライアントサイドルーティング用。

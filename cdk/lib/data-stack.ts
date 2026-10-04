@@ -29,6 +29,8 @@ export class DataStack extends cdk.Stack {
   public readonly userPool: cognito.UserPool;
   public readonly userPoolClient: cognito.UserPoolClient;
   public readonly userPoolDomain: cognito.UserPoolDomain;
+  // api-fnがCognitoへ渡すリダイレクト先と、CSRF検証の基準になる
+  public readonly appUrl: string | undefined;
 
   constructor(scope: Construct, id: string, props?: cdk.StackProps) {
     super(scope, id, props);
@@ -40,6 +42,7 @@ export class DataStack extends cdk.Stack {
       | string
       | undefined;
     const appUrl = appDomain ? `https://${appDomain}` : undefined;
+    this.appUrl = appUrl;
     // ドキュメントのpresigned PUT/GETはローカル開発のSPAからも実行する
     const appOrigins = appUrl ? [appUrl, LOCAL_ORIGIN] : undefined;
 
@@ -177,7 +180,11 @@ export class DataStack extends cdk.Stack {
           cognito.OAuthScope.EMAIL,
           cognito.OAuthScope.PROFILE,
         ],
+        // 認可コードはapi-fnが受け取って交換する(ADR-0018)
         callbackUrls: [
+          `${LOCAL_ORIGIN}/api/auth/callback`,
+          ...(appUrl ? [`${appUrl}/api/auth/callback`] : []),
+          // 切り替え前のSPAのコールバック。開いたままの旧SPAのタブがなくなったら削除する
           `${LOCAL_ORIGIN}/auth/callback`,
           ...(appUrl ? [`${appUrl}/auth/callback`] : []),
         ],
@@ -206,7 +213,11 @@ export class DataStack extends cdk.Stack {
     new cdk.CfnOutput(this, "UserPoolClientId", {
       value: this.userPoolClient.userPoolClientId,
     });
-    // SPAのVITE_COGNITO_AUTHORITYとバックエンドのCOGNITO_ISSUERに使う
+    // バックエンドのローカル開発用.envのCOGNITO_DOMAINに使う
+    new cdk.CfnOutput(this, "CognitoDomain", {
+      value: this.userPoolDomain.baseUrl(),
+    });
+    // バックエンドのCOGNITO_ISSUERに使う
     new cdk.CfnOutput(this, "CognitoIssuer", {
       value: this.userPool.userPoolProviderUrl,
     });

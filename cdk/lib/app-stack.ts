@@ -151,6 +151,9 @@ export class AppStack extends cdk.Stack {
         VECTOR_INDEX_ARN: dataStack.vectorIndex.attrIndexArn,
         COGNITO_ISSUER: dataStack.userPool.userPoolProviderUrl,
         COGNITO_CLIENT_ID: dataStack.userPoolClient.userPoolClientId,
+        // サインインと更新でHosted UIを呼ぶ(ADR-0018)
+        COGNITO_DOMAIN: dataStack.userPoolDomain.baseUrl(),
+        APP_ORIGIN: dataStack.appUrl ?? "",
         CHAT_DAILY_QUOTA,
         POWERTOOLS_SERVICE_NAME: "api",
         POWERTOOLS_LOG_LEVEL: "INFO",
@@ -185,6 +188,8 @@ export class AppStack extends cdk.Stack {
         VECTOR_INDEX_ARN: dataStack.vectorIndex.attrIndexArn,
         COGNITO_ISSUER: dataStack.userPool.userPoolProviderUrl,
         COGNITO_CLIENT_ID: dataStack.userPoolClient.userPoolClientId,
+        // 別オリジンからのPOSTを拒否するCSRF検証に使う
+        APP_ORIGIN: dataStack.appUrl ?? "",
         BEDROCK_ANSWER_MODEL,
         BEDROCK_UTILITY_MODEL,
         BEDROCK_EMBEDDING_MODEL,
@@ -327,8 +332,13 @@ export class AppStack extends cdk.Stack {
     // FastAPIのルートは全て`/api`配下にある(CloudFrontの`/api/*`と一致させる為)
     const apiResource = this.restApi.root.addResource("api");
 
-    // ヘルスチェックは無認証。オーソライザを付けない唯一のルート
+    // ヘルスチェックとサインイン関連は無認証。
+    // 更新は期限切れのアクセストークンしか持たない状態で呼ばれる為、オーソライザを付けられない(ADR-0018)
     apiResource.addResource("health").addMethod("GET", apiIntegration);
+    apiResource
+      .addResource("auth")
+      .addResource("{proxy+}")
+      .addMethod("ANY", apiIntegration);
 
     // `/api/chats`直下にchat-fnとapi-fnの両方のルートがある為、
     // `/api/{proxy+}`だけでは足りず、chats配下を明示的に分岐させる。
