@@ -1,6 +1,5 @@
 import { useQuery } from "@tanstack/react-query";
 import { useState } from "react";
-import { useAuth } from "react-oidc-context";
 import { useParams } from "react-router-dom";
 import {
   fetchUser,
@@ -8,6 +7,7 @@ import {
   listUserChats,
   listUserDocuments,
 } from "../api/users";
+import { useCurrentUser } from "../auth/useCurrentUser";
 import { ChatHistory } from "../components/ChatHistory";
 import { DocumentTable } from "../components/DocumentTable";
 import { isNotFound, toErrorMessage } from "../lib/errors";
@@ -24,7 +24,7 @@ export function UserDetail() {
   const params = useParams();
   // ルート定義上userIdは必ず入る
   const userId = params.userId!;
-  const auth = useAuth();
+  const { data: currentUser } = useCurrentUser();
   const [error, setError] = useState<string | null>(null);
   const { openDocument, openingId } = useOpenDocument(setError);
   const { removeDocument, deletingId } = useDeleteDocument(setError);
@@ -122,7 +122,7 @@ export function UserDetail() {
         ) : (
           <ChatHistory
             chats={chatsQuery.data}
-            currentUserId={auth.user?.profile.sub}
+            currentUserId={currentUser?.userId}
           />
         ))}
 
@@ -147,7 +147,7 @@ export function UserDetail() {
             {/* 取込は/documentsに集約している為、ここは閲覧と削除だけ */}
             <DocumentTable
               documents={documentsQuery.data}
-              currentUserId={auth.user?.profile.sub}
+              currentUserId={currentUser?.userId}
               onOpen={handleOpen}
               openingId={openingId}
               onDelete={handleDelete}

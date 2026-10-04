@@ -30,8 +30,6 @@ jobs:
       - run: npm run lint
       - run: npm run format:check
       - run: npm test
-      # VITE_COGNITO_*はビルド時に埋め込まれるが、型検査とバンドルは値なしでも通る。
-      # 実際の値の注入はdeploy-frontend.ymlが行う
       - run: npm run build
 
   backend:

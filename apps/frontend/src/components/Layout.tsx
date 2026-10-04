@@ -1,21 +1,10 @@
-import { useAuth } from "react-oidc-context";
 import { Link, NavLink, Outlet } from "react-router-dom";
+import { signOut } from "../auth/session";
+import { useCurrentUser } from "../auth/useCurrentUser";
 import "./Layout.css";
 
 export function Layout() {
-  const auth = useAuth();
-
-  const handleSignOut = async () => {
-    // removeUserで先にトークンを消すと、RequireAuthのサインインリダイレクトが/logoutへの遷移を
-    // 上書きする。signoutRedirectはactiveNavigatorを立ててから消すため競合しない
-    // Cognitoの/logoutはclient_idとlogout_uriがあれば他のパラメータを無視する
-    await auth.signoutRedirect({
-      extraQueryParams: {
-        client_id: auth.settings.client_id,
-        logout_uri: window.location.origin,
-      },
-    });
-  };
+  const { data: user } = useCurrentUser();
 
   return (
     <div className="layout">
@@ -29,12 +18,10 @@ export function Layout() {
             <NavLink to="/documents">ドキュメント</NavLink>
           </nav>
           <div className="layout-user">
-            {auth.user && (
-              <Link to={`/user/${auth.user.profile.sub}`}>
-                {auth.user.profile.name}
-              </Link>
+            {user && (
+              <Link to={`/user/${user.userId}`}>{user.displayName}</Link>
             )}
-            <button type="button" onClick={() => void handleSignOut()}>
+            <button type="button" onClick={() => void signOut()}>
               サインアウト
             </button>
           </div>

@@ -11,6 +11,12 @@ export interface UserProfile {
   updatedAt: string;
 }
 
+/** サインイン中のユーザー。プロフィールはサインイン時にapi-fnが同期する。 */
+export async function fetchMe(): Promise<UserProfile> {
+  const res = await api.get<UserProfile>("/users/me");
+  return res.data;
+}
+
 export async function fetchUser(userId: string): Promise<UserProfile> {
   const res = await api.get<UserProfile>(`/users/${userId}`);
   return res.data;

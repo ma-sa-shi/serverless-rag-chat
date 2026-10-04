@@ -1,6 +1,5 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { useState } from "react";
-import { useAuth } from "react-oidc-context";
 import {
   completeUpload,
   createUploadUrl,
@@ -8,6 +7,7 @@ import {
   putToS3,
   startIngest,
 } from "../api/documents";
+import { useCurrentUser } from "../auth/useCurrentUser";
 import { DocumentTable } from "../components/DocumentTable";
 import { UploadForm } from "../components/UploadForm";
 import { toErrorMessage } from "../lib/errors";
@@ -20,7 +20,7 @@ const DOCUMENTS_QUERY_KEY = ["documents"];
 const POLL_INTERVAL_MS = 3000;
 
 export function Documents() {
-  const auth = useAuth();
+  const { data: currentUser } = useCurrentUser();
   const queryClient = useQueryClient();
   const [error, setError] = useState<string | null>(null);
   const { openDocument, openingId } = useOpenDocument(setError);
@@ -139,7 +139,7 @@ export function Documents() {
           <div className="table-scroll">
             <DocumentTable
               documents={documentsQuery.data}
-              currentUserId={auth.user?.profile.sub}
+              currentUserId={currentUser?.userId}
               onOpen={handleOpen}
               openingId={openingId}
               showOwner

@@ -1,4 +1,4 @@
-import { userManager } from "../auth/userManager";
+import { refreshSession } from "../auth/session";
 import { toAuthErrorMessage } from "../lib/errors";
 import { readSse } from "../lib/sse";
 import { api } from "./client";
@@ -104,7 +104,7 @@ const INTERRUPTED_MESSAGE =
 const QUOTA_EXCEEDED_MESSAGE =
   "本日の利用上限に達しました。日付が変わると再び送信できます。";
 
-/** POST + Authorizationヘッダーで購読する理由はADR-0012。
+/** POSTで購読する理由はADR-0012。アクセストークンはCookieで送られる(ADR-0018)。
  * axiosは逐次読み出しに対応しない為ここだけfetchを使い、client.tsのインターセプタ相当を自前で書く。
  */
 export async function streamChat(
@@ -112,34 +112,10 @@ export async function streamChat(
   onEvent: (event: ChatStreamEvent) => void,
   signal: AbortSignal,
 ): Promise<void> {
-  const user = await userManager.getUser();
-
-  const headers: Record<string, string> = {
-    "Content-Type": "application/json",
-    Accept: "text/event-stream",
-  };
-  // トークンが無い場合はヘッダーを付けず、サーバー側に401を返させる
-  if (user?.access_token) {
-    headers.Authorization = `Bearer ${user.access_token}`;
-  }
-
-  let res: Response;
-  try {
-    res = await fetch("/api/chats/stream", {
-      method: "POST",
-      headers,
-      body: JSON.stringify({ question }),
-      signal,
-    });
-  } catch (e) {
-    // 中断は呼び出し側で区別する為そのまま投げ直す
-    if (e instanceof Error && e.name === "AbortError") throw e;
-    throw new Error(
-      "回答の生成に失敗しました（サーバーに接続できませんでした）",
-      {
-        cause: e,
-      },
-    );
+  let res = await postStream(question, signal);
+  // 401はグラフの実行前に返る為、送り直しても利用回数を二重に消費しない
+  if (res.status === 401 && (await refreshSession())) {
+    res = await postStream(question, signal);
   }
 
   // fetchは4xx/5xxでrejectしない為、ステータスを自分で確認する
@@ -174,6 +150,32 @@ export async function streamChat(
   }
 
   throw new Error(INTERRUPTED_MESSAGE);
+}
+
+async function postStream(
+  question: string,
+  signal: AbortSignal,
+): Promise<Response> {
+  try {
+    return await fetch("/api/chats/stream", {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        Accept: "text/event-stream",
+      },
+      body: JSON.stringify({ question }),
+      signal,
+    });
+  } catch (e) {
+    // 中断は呼び出し側で区別する為そのまま投げ直す
+    if (e instanceof Error && e.name === "AbortError") throw e;
+    throw new Error(
+      "回答の生成に失敗しました（サーバーに接続できませんでした）",
+      {
+        cause: e,
+      },
+    );
+  }
 }
 
 async function toResponseMessage(res: Response): Promise<string> {

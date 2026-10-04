@@ -1,10 +1,10 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { useEffect, useRef, useState } from "react";
-import { useAuth } from "react-oidc-context";
 import { Link } from "react-router-dom";
 import type { ChatCompletion } from "../api/chats";
 import { listChats, streamChat } from "../api/chats";
 import { fetchUserQuota } from "../api/users";
+import { useCurrentUser } from "../auth/useCurrentUser";
 import { ChatHistory } from "../components/ChatHistory";
 import { ChatProgress } from "../components/ChatProgress";
 import { GradeBadge } from "../components/GradeBadge";
@@ -17,7 +17,7 @@ import "./Home.css";
 const CHATS_QUERY_KEY = ["chats"];
 
 export function Home() {
-  const auth = useAuth();
+  const { data: currentUser } = useCurrentUser();
   const queryClient = useQueryClient();
   const [attempts, setAttempts] = useState<Attempt[]>([]);
   const [completion, setCompletion] = useState<ChatCompletion | null>(null);
@@ -34,7 +34,7 @@ export function Home() {
     queryFn: listChats,
   });
 
-  const userId = auth.user?.profile.sub;
+  const userId = currentUser?.userId;
   const quotaQuery = useQuery({
     queryKey: ["user", userId, "quota"],
     queryFn: () => fetchUserQuota(userId!),

@@ -8,7 +8,7 @@ Vite + React 19によるSPAで、本番はS3へ配置しCloudFrontから配信�
 npm install
 ```
 
-Cognitoの設定値はビルド時に埋め込まれる。`.env.example`を`.env.local`へコピーし、DataStackの出力値を設定する(`cdk/README.md`)。
+Cognitoの設定は持たない。サインインはバックエンドの`/api/auth/*`が行い、トークンはHttpOnly Cookieでブラウザが送る(ADR-0018)。
 
 ## 開発サーバー
 

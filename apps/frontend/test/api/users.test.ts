@@ -3,10 +3,6 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import { api } from "../../src/api/client";
 import { fetchUserQuota } from "../../src/api/users";
 
-vi.mock("../../src/auth/userManager", () => ({
-  userManager: { getUser: () => Promise.resolve(null) },
-}));
-
 afterEach(() => {
   vi.restoreAllMocks();
   delete api.defaults.adapter;
