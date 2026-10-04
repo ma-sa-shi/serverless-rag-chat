@@ -223,7 +223,10 @@ export class AppStack extends cdk.Stack {
     );
     // Rerankはモデルではなくアクション単位で許可する。実際に使えるモデルは上のInvokeModelで絞る
     this.chatFunction.addToRolePolicy(
-      new iam.PolicyStatement({ actions: ["bedrock:Rerank"], resources: ["*"] }),
+      new iam.PolicyStatement({
+        actions: ["bedrock:Rerank"],
+        resources: ["*"],
+      }),
     );
 
     // --- ドキュメント取込 Worker Lambda (ingest-fn) ---
